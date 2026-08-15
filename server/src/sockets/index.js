@@ -1,0 +1,172 @@
+/**
+ * DropShare — Socket.IO Server
+ *
+ * Architecture overview:
+ *
+ *   Browser (React + socket.io-client)
+ *       │
+ *       │ HTTP GET /socket.io/... (initial handshake)
+ *       │ 101 Switching Protocols
+ *       │ ─────────────────────────────────────────────
+ *       │ WebSocket (persistent bidirectional TCP connection)
+ *       │
+ *   Nginx (WebSocket upgrade headers forwarded)
+ *       │
+ *   Socket.IO on Node.js
+ *
+ * WebSocket sits on top of TCP. TCP handles:
+ *   - Reliable byte delivery
+ *   - Packet ordering
+ *   - Retransmission of lost TCP segments
+ *   - Flow control + congestion control
+ *
+ * Our application adds on top:
+ *   - Transfer IDs (identify which transfer a chunk belongs to)
+ *   - Application-level ACKs (did the receiver process this chunk?)
+ *   - Transfer state machine (PENDING → TRANSFERRING → COMPLETED)
+ *   - Resume after disconnection (from last PostgreSQL checkpoint)
+ *
+ * Multi-instance coordination:
+ *   Client A on EC2-1 sends to Client B on EC2-2.
+ *   EC2-1 publishes via Redis Pub/Sub.
+ *   EC2-2 receives and emits to Client B's socket.
+ */
+
+'use strict';
+
+const { Server } = require('socket.io');
+const { verifyToken } = require('../services/authService');
+const { setUserOnline, setUserOffline } = require('../redis/presence');
+const { presence, transferEvents } = require('../redis/pubsub');
+const { SOCKET_EVENTS } = require('../constants');
+const { updateLastSeen } = require('../services/userService');
+const logger = require('../utils/logger');
+const config = require('../config/env');
+
+const presenceHandler = require('./presenceHandler');
+const transferHandler = require('./transferHandler');
+const chunkHandler    = require('./chunkHandler');
+const recoveryHandler = require('./recoveryHandler');
+
+/**
+ * Initialize Socket.IO on the HTTP server.
+ * @param {import('http').Server} httpServer
+ * @returns {import('socket.io').Server}
+ */
+function initSocketIO(httpServer) {
+  const io = new Server(httpServer, {
+    cors: {
+      origin: config.CLIENT_URL,
+      methods: ['GET', 'POST'],
+      credentials: true,
+    },
+    // Allow larger payloads for binary chunk data.
+    // Each chunk is CHUNK_SIZE_BYTES (default 1 MB) + JSON overhead.
+    maxHttpBufferSize: config.CHUNK_SIZE_BYTES * 2,
+    // Prefer WebSocket transport (avoid HTTP long-polling for large transfers)
+    transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000,
+  });
+
+  // ── Authentication Middleware ─────────────────────────────────
+  // Authenticate every Socket.IO connection before it's established.
+  // The JWT is sent in the auth object: socket.handshake.auth.token
+  // We must derive identity from the token — never trust client-provided userId.
+  io.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token;
+      if (!token) {
+        return next(new Error('Authentication required'));
+      }
+
+      const decoded = verifyToken(token);
+      // Attach userId to the socket — accessible in all event handlers
+      socket.userId = decoded.userId;
+      next();
+    } catch (err) {
+      logger.warn('Socket auth failed', { error: err.message });
+      next(new Error('Invalid or expired token'));
+    }
+  });
+
+  // ── Connection Handler ────────────────────────────────────────
+  io.on('connection', async (socket) => {
+    const { userId } = socket;
+    logger.info('Socket connected', { userId, socketId: socket.id });
+
+    // Mark user online in Redis + broadcast to other instances
+    await setUserOnline(userId, socket.id);
+    await presence.publish(SOCKET_EVENTS.USER_ONLINE, { userId });
+
+    // Emit to all other connected clients on THIS instance
+    socket.broadcast.emit(SOCKET_EVENTS.USER_ONLINE, { userId });
+
+    // Register event handlers — each handler file owns its domain
+    presenceHandler.register(io, socket);
+    transferHandler.register(io, socket);
+    chunkHandler.register(io, socket);
+    recoveryHandler.register(io, socket);
+
+    // ── Disconnect ─────────────────────────────────────────────
+    socket.on('disconnect', async (reason) => {
+      logger.info('Socket disconnected', { userId, socketId: socket.id, reason });
+
+      await setUserOffline(userId);
+      await updateLastSeen(userId);
+      await presence.publish(SOCKET_EVENTS.USER_OFFLINE, { userId });
+      socket.broadcast.emit(SOCKET_EVENTS.USER_OFFLINE, { userId });
+
+      // Mark any active transfers as INTERRUPTED so they can be recovered
+      await chunkHandler.handleDisconnect(userId);
+    });
+  });
+
+  // ── Cross-Instance Event Routing via Redis ────────────────────
+  // When an event is published from another EC2 instance, relay it
+  // to the appropriate local socket if the user is connected here.
+  setupRedisEventRouting(io);
+
+  logger.info('Socket.IO initialized');
+  return io;
+}
+
+/**
+ * Subscribe to Redis channels and relay events to locally-connected clients.
+ * This is how EC2-1 can send events to clients connected to EC2-2.
+ */
+function setupRedisEventRouting(io) {
+  // Presence events from other instances
+  presence.subscribe((eventName, data) => {
+    // Broadcast presence changes to all local clients so they update their UI
+    io.emit(eventName, data);
+  });
+
+  // Transfer events (request, accept, reject, etc.) from other instances
+  transferEvents.subscribe((eventName, data) => {
+    const { targetUserId } = data;
+    if (!targetUserId) return;
+
+    // Find the target user's socket on THIS instance
+    const targetSocket = findSocketByUserId(io, targetUserId);
+    if (targetSocket) {
+      targetSocket.emit(eventName, data.payload);
+      logger.debug('Cross-instance event relayed', { eventName, targetUserId });
+    }
+    // If the user isn't on this instance, no action needed —
+    // the correct instance will handle it via its own Redis subscription.
+  });
+}
+
+/**
+ * Find a connected socket by userId on this instance.
+ * Linear scan of connected sockets — acceptable for V1 scale.
+ */
+function findSocketByUserId(io, userId) {
+  for (const [, socket] of io.sockets.sockets) {
+    if (socket.userId === userId) return socket;
+  }
+  return null;
+}
+
+module.exports = { initSocketIO, findSocketByUserId };
