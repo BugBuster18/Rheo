@@ -1,23 +1,21 @@
 /**
  * DropShare — File Drop Zone Component
  */
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { formatBytes } from '../utils/fileUtils';
 
-export default function DropZone({ onFileSelect }) {
+export default function DropZone({ file, onFileSelect }) {
   const [dragging, setDragging] = useState(false);
-  const [file, setFile]         = useState(null);
   const inputRef = useRef(null);
 
   const handleFile = useCallback((f) => {
-    setFile(f);
-    onFileSelect(f);
+    if (onFileSelect) onFileSelect(f);
   }, [onFileSelect]);
 
   const onDrop = useCallback((e) => {
     e.preventDefault();
     setDragging(false);
-    const f = e.dataTransfer.files[0];
+    const f = e.dataTransfer?.files?.[0];
     if (f) handleFile(f);
   }, [handleFile]);
 
@@ -49,7 +47,7 @@ export default function DropZone({ onFileSelect }) {
 
         {file ? (
           <div className="space-y-1">
-            <p className="font-medium text-slate-100">{file.name}</p>
+            <p className="font-medium text-slate-100 truncate max-w-[280px]">{file.name}</p>
             <p className="text-sm text-slate-500">{formatBytes(file.size)}</p>
             <p className="text-xs text-brand-400">Click to change file</p>
           </div>
@@ -60,8 +58,18 @@ export default function DropZone({ onFileSelect }) {
           </div>
         )}
       </div>
-      <input ref={inputRef} type="file" className="hidden"
-        onChange={e => e.target.files[0] && handleFile(e.target.files[0])} />
+      <input
+        ref={inputRef}
+        type="file"
+        className="hidden"
+        onChange={e => {
+          if (e.target.files && e.target.files[0]) {
+            handleFile(e.target.files[0]);
+          }
+          e.target.value = '';
+        }}
+      />
     </div>
   );
 }
+

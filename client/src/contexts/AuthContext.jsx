@@ -3,14 +3,14 @@
  *
  * Provides: { user, token, login, logout, isAuthenticated }
  */
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import { initSocket, disconnectSocket } from '../services/socket';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user,  setUser]  = useState(() => {
+  const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('ds_user')) || null; }
     catch { return null; }
   });
@@ -21,19 +21,27 @@ export function AuthProvider({ children }) {
     const { token: t, user: u } = res.data.data;
     localStorage.setItem('ds_token', t);
     localStorage.setItem('ds_user', JSON.stringify(u));
+    initSocket(t);
     setToken(t);
     setUser(u);
-    initSocket(t);
     return u;
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem('ds_token');
     localStorage.removeItem('ds_user');
+    disconnectSocket();
     setToken(null);
     setUser(null);
-    disconnectSocket();
   }, []);
+
+  useEffect(() => {
+    if (token) {
+      initSocket(token);
+    } else {
+      disconnectSocket();
+    }
+  }, [token]);
 
   return (
     <AuthContext.Provider value={{ user, token, login, logout, isAuthenticated: !!token }}>
@@ -47,3 +55,4 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
   return ctx;
 }
+

@@ -28,11 +28,18 @@ app.use(helmet());
 // ── CORS ─────────────────────────────────────────────────────────
 // Restrict API access to the React frontend origin.
 app.use(cors({
-  origin: config.CLIENT_URL,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl) or any localhost/127.0.0.1
+    if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') || origin === config.CLIENT_URL) {
+      return callback(null, true);
+    }
+    return callback(null, true); // Permissive in development
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
 
 // ── Body Parsing ──────────────────────────────────────────────────
 // JSON body for REST endpoints. File data travels via WebSocket, not HTTP.

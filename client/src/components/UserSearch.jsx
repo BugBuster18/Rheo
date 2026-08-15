@@ -10,7 +10,7 @@ export default function UserSearch({ selected, onToggle }) {
   const [query, setQuery]   = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const { isOnline } = usePresence();
+  const { isOnline, queryPresence } = usePresence();
 
   const search = useCallback(async (q) => {
     setQuery(q);
@@ -18,10 +18,14 @@ export default function UserSearch({ selected, onToggle }) {
     setLoading(true);
     try {
       const res = await api.get(`/users/search?q=${encodeURIComponent(q)}`);
-      setResults(res.data.data.users || []);
+      const users = res.data.data.users || [];
+      setResults(users);
+      if (users.length > 0) {
+        queryPresence(users.map(u => u.id));
+      }
     } catch { setResults([]); }
     finally { setLoading(false); }
-  }, []);
+  }, [queryPresence]);
 
   return (
     <div className="space-y-3">

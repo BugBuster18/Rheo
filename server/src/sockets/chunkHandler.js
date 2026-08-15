@@ -44,7 +44,7 @@
 const { SOCKET_EVENTS, TRANSFER_STATUS } = require('../constants');
 const transferManager = require('../transfer/TransferManager');
 const transferService = require('../services/transferService');
-const { findSocketByUserId } = require('./index');
+const { findSocketByUserId } = require('./socketUtils');
 const logger = require('../utils/logger');
 const config = require('../config/env');
 
@@ -68,8 +68,10 @@ function register(io, socket) {
       return;
     }
 
-    // Reject chunks if the transfer is not in TRANSFERRING state
-    if (state.status !== TRANSFER_STATUS.TRANSFERRING) {
+    // Allow chunk if transfer is in ACCEPTED or TRANSFERRING state
+    if (state.status === TRANSFER_STATUS.ACCEPTED) {
+      state.status = TRANSFER_STATUS.TRANSFERRING;
+    } else if (state.status !== TRANSFER_STATUS.TRANSFERRING) {
       socket.emit(SOCKET_EVENTS.ERROR, {
         message: `Cannot receive chunk: transfer is ${state.status}`,
         transferId,
@@ -80,24 +82,14 @@ function register(io, socket) {
     // Update in-memory state
     state.markSent(chunkIndex, chunkData.byteLength || chunkData.length || 0);
 
-    // Relay chunk to receiver immediately — server is a relay in V1.
-    // File data does NOT go through Redis — it flows:
-    //   Sender socket → Server → Receiver socket (all TCP underneath)
-    const receiverSocket = findSocketByUserId(io, state.receiverId);
-    if (receiverSocket) {
-      receiverSocket.emit(SOCKET_EVENTS.CHUNK, {
-        transferId,
-        chunkIndex,
-        totalChunks,
-        chunkData,
-      });
-    } else {
-      // Receiver disconnected — mark transfer as interrupted
-      logger.warn('Receiver not found for chunk relay', { transferId, receiverId: state.receiverId });
-      state.status = TRANSFER_STATUS.INTERRUPTED;
-      await transferService.updateTransferStatus(transferId, TRANSFER_STATUS.INTERRUPTED);
-      socket.emit(SOCKET_EVENTS.TRANSFER_FAILED, { transferId, message: 'Receiver disconnected' });
-    }
+
+    // Relay chunk to receiver immediately via receiver user room
+    io.to(`user:${state.receiverId}`).emit(SOCKET_EVENTS.CHUNK, {
+      transferId,
+      chunkIndex,
+      totalChunks,
+      chunkData,
+    });
   });
 
   // ── CHUNK_ACK ─────────────────────────────────────────────────
@@ -120,18 +112,15 @@ function register(io, socket) {
       await transferService.checkpointTransfer(transferId, state.lastConfirmedChunk);
     }
 
-    // Forward ACK to sender (who may be on this or another instance)
-    const senderSocket = findSocketByUserId(io, state.senderId);
-    if (senderSocket) {
-      senderSocket.emit(SOCKET_EVENTS.CHUNK_ACK, {
-        transferId,
-        chunkIndex,
-        progressPercent:    state.progressPercent,
-        bytesTransferred:   state.bytesTransferred,
-        speedBytesPerSecond: state.speedBytesPerSecond,
-        etaSeconds:         state.etaSeconds,
-      });
-    }
+    // Forward ACK to sender user room
+    io.to(`user:${state.senderId}`).emit(SOCKET_EVENTS.CHUNK_ACK, {
+      transferId,
+      chunkIndex,
+      progressPercent:    state.progressPercent,
+      bytesTransferred:   state.bytesTransferred,
+      speedBytesPerSecond: state.speedBytesPerSecond,
+      etaSeconds:         state.etaSeconds,
+    });
 
     // Check if transfer is complete
     if (state.isComplete) {
@@ -141,18 +130,13 @@ function register(io, socket) {
       logger.info('All chunks received — initiating hash verification', { transferId });
 
       // Trigger SHA-256 verification on the receiver side
-      const receiverSocket = findSocketByUserId(io, state.receiverId);
-      if (receiverSocket) {
-        receiverSocket.emit(SOCKET_EVENTS.HASH_VERIFY, {
-          transferId,
-          expectedHash: state.fileHash,
-        });
-      }
+      io.to(`user:${state.receiverId}`).emit(SOCKET_EVENTS.HASH_VERIFY, {
+        transferId,
+        expectedHash: state.fileHash,
+      });
 
       // Notify sender that all chunks were delivered
-      if (senderSocket) {
-        senderSocket.emit(SOCKET_EVENTS.TRANSFER_COMPLETE, { transferId });
-      }
+      io.to(`user:${state.senderId}`).emit(SOCKET_EVENTS.TRANSFER_COMPLETE, { transferId });
 
       transferManager.removeActiveTransfer(transferId);
     }

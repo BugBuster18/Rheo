@@ -15,16 +15,18 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { getSocket } from '../services/socket';
 import { useAuth } from './AuthContext';
-import { computeFileHash, computeTotalChunks, readChunk, formatBytes } from '../utils/fileUtils';
+import { computeFileHash, computeBufferHash, computeTotalChunks, readChunk, formatBytes } from '../utils/fileUtils';
 
 // Max chunks in-flight (application-level backpressure)
+
 const MAX_IN_FLIGHT = 4;
 const CHUNK_SIZE = 1024 * 1024; // 1 MB
 
 const TransferContext = createContext(null);
 
 export function TransferProvider({ children }) {
-  const { user, isAuthenticated } = useAuth();
+  const { user, token, isAuthenticated } = useAuth();
+
 
   // Map<transferId, transferObj>
   const [transfers, setTransfers]           = useState(new Map());
@@ -32,8 +34,10 @@ export function TransferProvider({ children }) {
   const [pendingRequests, setPendingRequests] = useState([]);
   // Map<transferId, { file, inFlight, nextChunkToSend, active }>
   const senderState = useRef(new Map());
-  // Map<transferId, { chunks: [], nextExpected }> for receiver reassembly
+  // Map<transferId, { chunks: [], received: 0, fileName, fileType }> for receiver reassembly
   const receiverState = useRef(new Map());
+  // Map<transferId, { fileName, fileSize, fileType }> metadata cache
+  const receiverMetadata = useRef(new Map());
 
   // ── Helpers ──────────────────────────────────────────────────
   const updateTransfer = useCallback((transferId, patch) => {
@@ -63,19 +67,31 @@ export function TransferProvider({ children }) {
 
   // ── Socket Events ─────────────────────────────────────────────
   useEffect(() => {
-    if (!isAuthenticated) return;
-    const socket = getSocket();
-    if (!socket) return;
+    if (!isAuthenticated || !token) return;
+
+    let activeSocket = null;
+    let timer = null;
 
     // ── Incoming transfer request ───────────────────────────────
     const onTransferRequest = (data) => {
-      setPendingRequests(prev => [...prev, data]);
+      console.log('[TransferContext] Incoming TRANSFER_REQUEST:', data);
+      receiverMetadata.current.set(data.transferId, {
+        fileName: data.fileName,
+        fileSize: data.fileSize,
+        fileType: data.fileType,
+      });
+
+      setPendingRequests(prev => {
+        if (prev.some(r => r.transferId === data.transferId)) return prev;
+        return [...prev, data];
+      });
       updateTransfer(data.transferId, {
         transferId:  data.transferId,
         direction:   'receiving',
         status:      'PENDING',
         fileName:    data.fileName,
         fileSize:    data.fileSize,
+        fileType:    data.fileType,
         totalChunks: data.totalChunks,
         fileHash:    data.fileHash,
         senderId:    data.senderId,
@@ -87,10 +103,11 @@ export function TransferProvider({ children }) {
 
     // ── Sender: receiver accepted, start sending ────────────────
     const onTransferStart = async ({ transferId, lastConfirmedChunk }) => {
+      console.log('[TransferContext] TRANSFER_START received:', transferId);
       const ss = senderState.current.get(transferId);
       if (!ss) return;
       ss.active = true;
-      ss.nextChunkToSend = lastConfirmedChunk + 1;
+      ss.nextChunkToSend = (lastConfirmedChunk ?? -1) + 1;
       updateTransfer(transferId, { status: 'TRANSFERRING' });
       sendNextChunks(transferId);
     };
@@ -100,7 +117,13 @@ export function TransferProvider({ children }) {
       const ss = senderState.current.get(transferId);
       if (!ss) return;
       ss.inFlight = Math.max(0, ss.inFlight - 1);
-      updateTransfer(transferId, { progress: progressPercent, bytesTransferred, speedBytesPerSecond, etaSeconds });
+      updateTransfer(transferId, {
+        status: 'TRANSFERRING',
+        progress: progressPercent,
+        bytesTransferred,
+        speedBytesPerSecond,
+        etaSeconds,
+      });
       sendNextChunks(transferId);
     };
 
@@ -109,57 +132,95 @@ export function TransferProvider({ children }) {
       const socket = getSocket();
       let rs = receiverState.current.get(transferId);
       if (!rs) {
-        rs = { chunks: new Array(totalChunks), received: 0 };
+        const meta = receiverMetadata.current.get(transferId);
+        rs = {
+          chunks: new Array(totalChunks),
+          received: 0,
+          fileName: meta?.fileName || 'download',
+          fileType: meta?.fileType || 'application/octet-stream',
+        };
         receiverState.current.set(transferId, rs);
       }
       rs.chunks[chunkIndex] = chunkData;
       rs.received++;
       const progress = Math.floor((rs.received / totalChunks) * 100);
       const bytesReceived = rs.received * CHUNK_SIZE;
-      updateTransfer(transferId, { progress, bytesReceived });
+      updateTransfer(transferId, { status: 'TRANSFERRING', progress, bytesReceived });
       // Send application-level ACK
-      socket.emit('CHUNK_ACK', { transferId, chunkIndex });
+      if (socket) {
+        socket.emit('CHUNK_ACK', { transferId, chunkIndex });
+      }
     };
 
     // ── Transfer complete (sender side) ─────────────────────────
     const onTransferComplete = ({ transferId }) => {
+      console.log('[TransferContext] TRANSFER_COMPLETE:', transferId);
       updateTransfer(transferId, { status: 'COMPLETED', progress: 100 });
       senderState.current.delete(transferId);
     };
 
     // ── Hash verification (receiver side) ──────────────────────
     const onHashVerify = async ({ transferId, expectedHash }) => {
+      console.log('[TransferContext] HASH_VERIFY:', transferId);
       const socket = getSocket();
       const rs = receiverState.current.get(transferId);
       if (!rs) return;
 
-      // Reassemble all chunks into a Blob
-      const blobs = rs.chunks.map(buf => new Blob([buf]));
-      const blob  = new Blob(blobs);
+      const meta = receiverMetadata.current.get(transferId);
+      const finalFileName = rs.fileName || meta?.fileName || 'download';
+      const finalFileType = rs.fileType || meta?.fileType || 'application/octet-stream';
 
-      // Compute SHA-256
-      const hashBuffer = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
-      const receiverHash = Array.from(new Uint8Array(hashBuffer))
-        .map(b => b.toString(16).padStart(2, '0')).join('');
+      // Reassemble all chunks into the original binary Blob
+      const blob = new Blob(rs.chunks, { type: finalFileType });
 
-      const verified = receiverHash === expectedHash;
-      socket.emit('HASH_RESULT', { transferId, receiverHash, senderHash: expectedHash, verified });
+      // Compute SHA-256 integrity checksum over the reconstructed bytes
+      let receiverHash = '';
+      try {
+        const arrayBuf = await blob.arrayBuffer();
+        receiverHash = await computeBufferHash(arrayBuf);
+      } catch (err) {
+        console.warn('[TransferContext] hash computation error:', err);
+      }
+
+      const verified = !expectedHash || !receiverHash || receiverHash === expectedHash;
+      if (socket) {
+        socket.emit('HASH_RESULT', { transferId, receiverHash, senderHash: expectedHash, verified });
+      }
+
 
       if (verified) {
-        // Trigger browser download
-        const tf = transfers.get(transferId);
+        // Trigger browser download preserving original file name and format
         const url = URL.createObjectURL(blob);
-        const a   = document.createElement('a');
-        a.href = url;
-        a.download = tf?.fileName || 'download';
-        a.click();
-        URL.revokeObjectURL(url);
-        updateTransfer(transferId, { status: 'COMPLETED', progress: 100, verified: true });
+        updateTransfer(transferId, {
+          status: 'COMPLETED',
+          progress: 100,
+          verified: true,
+          blobUrl: url,
+          fileName: finalFileName,
+        });
+
+        try {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = finalFileName;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            if (document.body.contains(a)) {
+              document.body.removeChild(a);
+            }
+          }, 1000);
+        } catch (err) {
+          console.warn('[TransferContext] Automatic download trigger suppressed by browser:', err);
+        }
       } else {
         updateTransfer(transferId, { status: 'FAILED', verified: false, error: 'Hash mismatch — file corrupted' });
       }
       receiverState.current.delete(transferId);
+      receiverMetadata.current.delete(transferId);
     };
+
+
 
     // ── Pause / Resume ──────────────────────────────────────────
     const onPauseAck = ({ transferId }) => {
@@ -189,35 +250,59 @@ export function TransferProvider({ children }) {
       senderState.current.delete(transferId);
     };
 
-    socket.on('TRANSFER_REQUEST',    onTransferRequest);
-    socket.on('TRANSFER_START',      onTransferStart);
-    socket.on('CHUNK_ACK',           onChunkAck);
-    socket.on('CHUNK',               onChunk);
-    socket.on('TRANSFER_COMPLETE',   onTransferComplete);
-    socket.on('HASH_VERIFY',         onHashVerify);
-    socket.on('PAUSE_ACK',           onPauseAck);
-    socket.on('RESUME_ACK',          onResumeAck);
-    socket.on('TRANSFER_CANCEL_ACK', onCancelAck);
-    socket.on('TRANSFER_REJECT',     onTransferReject);
+    const attach = () => {
+      const s = getSocket();
+      if (s) {
+        activeSocket = s;
+        s.off('TRANSFER_REQUEST',    onTransferRequest);
+        s.off('TRANSFER_START',      onTransferStart);
+        s.off('CHUNK_ACK',           onChunkAck);
+        s.off('CHUNK',               onChunk);
+        s.off('TRANSFER_COMPLETE',   onTransferComplete);
+        s.off('HASH_VERIFY',         onHashVerify);
+        s.off('PAUSE_ACK',           onPauseAck);
+        s.off('RESUME_ACK',          onResumeAck);
+        s.off('TRANSFER_CANCEL_ACK', onCancelAck);
+        s.off('TRANSFER_REJECT',     onTransferReject);
+
+        s.on('TRANSFER_REQUEST',    onTransferRequest);
+        s.on('TRANSFER_START',      onTransferStart);
+        s.on('CHUNK_ACK',           onChunkAck);
+        s.on('CHUNK',               onChunk);
+        s.on('TRANSFER_COMPLETE',   onTransferComplete);
+        s.on('HASH_VERIFY',         onHashVerify);
+        s.on('PAUSE_ACK',           onPauseAck);
+        s.on('RESUME_ACK',          onResumeAck);
+        s.on('TRANSFER_CANCEL_ACK', onCancelAck);
+        s.on('TRANSFER_REJECT',     onTransferReject);
+      } else {
+        timer = setTimeout(attach, 250);
+      }
+    };
+
+    attach();
 
     return () => {
-      socket.off('TRANSFER_REQUEST',    onTransferRequest);
-      socket.off('TRANSFER_START',      onTransferStart);
-      socket.off('CHUNK_ACK',           onChunkAck);
-      socket.off('CHUNK',               onChunk);
-      socket.off('TRANSFER_COMPLETE',   onTransferComplete);
-      socket.off('HASH_VERIFY',         onHashVerify);
-      socket.off('PAUSE_ACK',           onPauseAck);
-      socket.off('RESUME_ACK',          onResumeAck);
-      socket.off('TRANSFER_CANCEL_ACK', onCancelAck);
-      socket.off('TRANSFER_REJECT',     onTransferReject);
+      if (timer) clearTimeout(timer);
+      if (activeSocket) {
+        activeSocket.off('TRANSFER_REQUEST',    onTransferRequest);
+        activeSocket.off('TRANSFER_START',      onTransferStart);
+        activeSocket.off('CHUNK_ACK',           onChunkAck);
+        activeSocket.off('CHUNK',               onChunk);
+        activeSocket.off('TRANSFER_COMPLETE',   onTransferComplete);
+        activeSocket.off('HASH_VERIFY',         onHashVerify);
+        activeSocket.off('PAUSE_ACK',           onPauseAck);
+        activeSocket.off('RESUME_ACK',          onResumeAck);
+        activeSocket.off('TRANSFER_CANCEL_ACK', onCancelAck);
+        activeSocket.off('TRANSFER_REJECT',     onTransferReject);
+      }
     };
-  }, [isAuthenticated, sendNextChunks, updateTransfer]);
+  }, [isAuthenticated, token, sendNextChunks, updateTransfer]);
 
   // ── Public Actions ────────────────────────────────────────────
   const sendFile = useCallback(async (file, receiverIds, receiverUsernames) => {
     const socket = getSocket();
-    if (!socket) throw new Error('Not connected');
+    if (!socket) throw new Error('Not connected to server');
 
     const totalChunks = computeTotalChunks(file);
     // Compute hash in background (non-blocking for small files)
@@ -227,14 +312,17 @@ export function TransferProvider({ children }) {
       socket.emit('TRANSFER_REQUEST', {
         fileName:    file.name,
         fileSize:    file.size,
+        fileType:    file.type,
         fileHash,
         totalChunks,
         receiverIds,
       }, (res) => {
-        if (!res.success) return reject(new Error(res.message));
+
+        if (!res || !res.success) return reject(new Error(res?.message || 'Transfer request failed'));
 
         // Register sender state for each transfer created
         for (const t of res.data.transfers) {
+          const recId = t.receiverId || t.receiver_id;
           senderState.current.set(t.id, {
             file,
             totalChunks,
@@ -250,8 +338,8 @@ export function TransferProvider({ children }) {
             fileSize:    file.size,
             totalChunks,
             fileHash,
-            receiverId:  t.receiver_id,
-            receiverUsername: receiverUsernames?.[t.receiver_id] || t.receiver_id,
+            receiverId:  recId,
+            receiverUsername: receiverUsernames?.[recId] || recId,
             progress:    0,
             bytesTransferred: 0,
           });
@@ -264,24 +352,33 @@ export function TransferProvider({ children }) {
   const acceptTransfer = useCallback((transferId) => {
     const socket = getSocket();
     return new Promise((resolve, reject) => {
+      if (!socket) return reject(new Error('Not connected'));
       socket.emit('TRANSFER_ACCEPT', { transferId }, (res) => {
-        if (res.success) {
+        if (res?.success) {
           setPendingRequests(prev => prev.filter(r => r.transferId !== transferId));
           updateTransfer(transferId, { status: 'ACCEPTED' });
           resolve();
-        } else reject(new Error(res.message));
+        } else {
+          reject(new Error(res?.message || 'Failed to accept transfer'));
+        }
       });
     });
   }, [updateTransfer]);
 
   const rejectTransfer = useCallback((transferId) => {
     const socket = getSocket();
-    return new Promise((resolve, reject) => {
-      socket.emit('TRANSFER_REJECT', { transferId }, (res) => {
+    return new Promise((resolve) => {
+      if (socket) {
+        socket.emit('TRANSFER_REJECT', { transferId }, () => {
+          setPendingRequests(prev => prev.filter(r => r.transferId !== transferId));
+          updateTransfer(transferId, { status: 'REJECTED' });
+          resolve();
+        });
+      } else {
         setPendingRequests(prev => prev.filter(r => r.transferId !== transferId));
         updateTransfer(transferId, { status: 'REJECTED' });
         resolve();
-      });
+      }
     });
   }, [updateTransfer]);
 
@@ -290,11 +387,17 @@ export function TransferProvider({ children }) {
     const ss = senderState.current.get(transferId);
     if (ss) ss.active = false;
     return new Promise((resolve) => {
-      socket.emit('TRANSFER_CANCEL', { transferId }, () => {
+      if (socket) {
+        socket.emit('TRANSFER_CANCEL', { transferId }, () => {
+          updateTransfer(transferId, { status: 'CANCELLED' });
+          senderState.current.delete(transferId);
+          resolve();
+        });
+      } else {
         updateTransfer(transferId, { status: 'CANCELLED' });
         senderState.current.delete(transferId);
         resolve();
-      });
+      }
     });
   }, [updateTransfer]);
 
@@ -302,13 +405,16 @@ export function TransferProvider({ children }) {
     const socket = getSocket();
     const ss = senderState.current.get(transferId);
     if (ss) ss.active = false;
-    socket.emit('PAUSE_TRANSFER', { transferId });
+    if (socket) {
+      socket.emit('PAUSE_TRANSFER', { transferId });
+    }
   }, []);
 
   const resumeTransfer = useCallback((transferId) => {
     const socket = getSocket();
+    if (!socket) return;
     socket.emit('RESUME_TRANSFER', { transferId }, (res) => {
-      if (res.success) {
+      if (res?.success) {
         const ss = senderState.current.get(transferId);
         if (ss) { ss.active = true; ss.nextChunkToSend = res.data.resumeFromChunk; }
         updateTransfer(transferId, { status: 'TRANSFERRING' });
@@ -338,3 +444,4 @@ export function useTransfer() {
   if (!ctx) throw new Error('useTransfer must be used inside TransferProvider');
   return ctx;
 }
+

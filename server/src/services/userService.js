@@ -23,7 +23,7 @@ async function searchUsers(query, requesterId) {
 
   const users = await prisma.user.findMany({
     where: {
-      username: { startsWith: query.trim(), mode: 'insensitive' },
+      username: { contains: query.trim(), mode: 'insensitive' },
       id:       { not: requesterId },
     },
     select: {
@@ -35,6 +35,7 @@ async function searchUsers(query, requesterId) {
     orderBy: { username: 'asc' },
     take: 20,
   });
+
 
   if (users.length === 0) return [];
 
@@ -78,10 +79,14 @@ async function isUserOnline(userId) {
  * @param {string} userId
  */
 async function updateLastSeen(userId) {
-  await prisma.user.update({
-    where: { id: userId },
-    data:  { lastSeen: new Date() },
-  });
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data:  { lastSeen: new Date() },
+    });
+  } catch (err) {
+    logger.warn('Failed to update user lastSeen', { userId, error: err.message });
+  }
 }
 
 module.exports = { searchUsers, getUserById, isUserOnline, updateLastSeen };
