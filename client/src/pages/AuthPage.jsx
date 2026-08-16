@@ -1,5 +1,6 @@
 /**
- * Login / Register Page — Rheo P2P Mesh
+ * RHEO — Login / Register Auth Page
+ * Clean off-white + teal design with animated background.
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -7,13 +8,13 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 
 export default function AuthPage() {
-  const [mode, setMode]       = useState('login'); // 'login' | 'register'
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [email, setEmail]       = useState('');
+  const [mode, setMode]             = useState('login');
+  const [username, setUsername]     = useState('');
+  const [password, setPassword]     = useState('');
+  const [email, setEmail]           = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [error, setError]       = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [error, setError]           = useState('');
+  const [loading, setLoading]       = useState(false);
   const { login } = useAuth();
   const navigate  = useNavigate();
 
@@ -37,83 +38,149 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface-950 px-4 relative overflow-hidden">
-      {/* Background ambient glow circles */}
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 relative overflow-hidden">
+      {/* Subtle mesh grid background */}
+      <div className="fixed inset-0 bg-mesh-grid pointer-events-none opacity-40" />
+
+      {/* Teal ambient glow blobs */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[700px] h-[700px] rounded-full bg-brand-600/10 blur-[120px]" />
-        <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full bg-emerald-500/10 blur-[100px]" />
+        <div className="absolute top-0 left-1/3 w-[500px] h-[500px] rounded-full bg-teal-400/10 blur-[120px]" />
+        <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] rounded-full bg-cyan-400/10 blur-[100px]" />
       </div>
 
-      <div className="card-glass p-8 w-full max-w-md animate-fade-in relative z-10 card-glow-brand border border-surface-600/50 shadow-2xl">
-        {/* Brand Header */}
-        <div className="flex items-center gap-3.5 mb-8">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-brand-600/40">
-            <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-          </div>
-          <div>
-            <h1 className="text-2xl font-extrabold gradient-text tracking-tight">Rheo</h1>
-            <p className="text-xs font-medium text-slate-400">High-Speed P2P File Mesh</p>
-          </div>
-        </div>
+      <div className="w-full max-w-md relative z-10 animate-fade-in">
+        {/* Card */}
+        <div className="bg-white/92 backdrop-blur-md border border-slate-200 rounded-3xl shadow-xl shadow-slate-900/5 overflow-hidden">
 
-        {/* Tabs */}
-        <div className="flex bg-surface-800 rounded-xl p-1 mb-6 border border-surface-600/40">
-          {['login', 'register'].map(m => (
-            <button key={m}
-              onClick={() => { setMode(m); setError(''); }}
-              className={`flex-1 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all duration-200
-                ${mode === m
-                  ? 'bg-brand-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'}`}>
-              {m === 'login' ? 'Sign In' : 'Create Account'}
-            </button>
-          ))}
-        </div>
+          {/* Brand Header Strip */}
+          <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-8 pt-8 pb-10 relative overflow-hidden">
+            {/* Decorative wave rings */}
+            <div className="absolute -right-8 -top-8 w-32 h-32 rounded-full border-2 border-white/20" />
+            <div className="absolute -right-2 -top-2 w-16 h-16 rounded-full border-2 border-white/10" />
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {mode === 'register' && (
-            <>
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Display Name</label>
-                <input id="displayName" className="input" value={displayName}
-                  onChange={e => setDisplayName(e.target.value)} placeholder="Ganesh Kumar" />
+            <div className="flex items-center gap-3 relative z-10">
+              <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-lg border border-white/30">
+                <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+                    d="M3 12c3-4 6-4 9 0s6 4 9 0M3 18c3-4 6-4 9 0s6 4 9 0" />
+                </svg>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Email</label>
-                <input id="email" type="email" className="input" value={email}
-                  onChange={e => setEmail(e.target.value)} placeholder="ganesh@example.com" />
+                <h1 className="text-2xl font-black text-white tracking-tight font-mono">RHEO</h1>
+                <p className="text-xs text-teal-100 font-semibold mt-0.5">Real-Time P2P File Flow Mesh</p>
               </div>
-            </>
-          )}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Username</label>
-            <input id="username" className="input" value={username}
-              onChange={e => setUsername(e.target.value)} placeholder="ganesh" required />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Password</label>
-            <input id="password" type="password" className="input" value={password}
-              onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
-          </div>
-
-          {error && (
-            <div className="px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs font-medium animate-fade-in">
-              {error}
             </div>
-          )}
 
-          <button id="submit-auth" type="submit" disabled={loading} className="btn-primary w-full py-3.5 mt-2 font-bold shadow-lg">
-            {loading ? (
-              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            ) : mode === 'login' ? 'Sign In to Rheo' : 'Initialize Account'}
-          </button>
-        </form>
+            <p className="text-sm text-white/80 mt-4 relative z-10 font-medium max-w-xs">
+              {mode === 'login'
+                ? 'Sign in to your mesh node and start flowing files instantly.'
+                : 'Create your RHEO node identity to join the P2P mesh network.'}
+            </p>
+          </div>
+
+          {/* Form Section */}
+          <div className="px-8 py-6 space-y-5">
+            {/* Tab switcher */}
+            <div className="flex bg-slate-100 p-1 rounded-2xl">
+              {['login', 'register'].map(m => (
+                <button
+                  key={m}
+                  onClick={() => { setMode(m); setError(''); }}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all ${
+                    mode === m
+                      ? 'bg-white text-teal-700 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {m === 'login' ? 'Sign In' : 'Create Account'}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {mode === 'register' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Display Name</label>
+                    <input
+                      id="displayName"
+                      className="input"
+                      value={displayName}
+                      onChange={e => setDisplayName(e.target.value)}
+                      placeholder="Ganesh Kumar"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Email</label>
+                    <input
+                      id="email"
+                      type="email"
+                      className="input"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="ganesh@example.com"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Username</label>
+                <input
+                  id="username"
+                  className="input"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  placeholder="ganesh"
+                  required
+                  autoComplete="username"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wider">Password</label>
+                <input
+                  id="password"
+                  type="password"
+                  className="input"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+
+              {error && (
+                <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-xs font-semibold animate-fade-in flex items-center gap-2">
+                  <span>⚠️</span>
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <button
+                id="submit-auth"
+                type="submit"
+                disabled={loading}
+                className="btn-teal w-full py-3.5 mt-2 font-extrabold text-sm rounded-2xl shadow-lg shadow-teal-600/20"
+              >
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Connecting to Mesh…
+                  </span>
+                ) : mode === 'login' ? '→ Sign In to RHEO' : '⚡ Initialize Node Identity'}
+              </button>
+            </form>
+
+            <p className="text-center text-xs text-slate-400 pt-1 font-mono">
+              End-to-end binary stream · SHA-256 verified · No cloud storage
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );

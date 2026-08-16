@@ -61,9 +61,13 @@ export function TransferProvider({ children }) {
       ss.inFlight++;
 
       const chunkData = await readChunk(ss.file, idx);
+      // Record send timestamp for latency measurement
+      if (!ss.chunkSendTimes) ss.chunkSendTimes = {};
+      ss.chunkSendTimes[idx] = Date.now();
       socket.emit('CHUNK', { transferId, chunkIndex: idx, totalChunks: ss.totalChunks, chunkData });
+      updateTransfer(transferId, { inFlight: ss.inFlight });
     }
-  }, []);
+  }, [updateTransfer]);
 
   // ── Socket Events ─────────────────────────────────────────────
   useEffect(() => {
@@ -117,12 +121,25 @@ export function TransferProvider({ children }) {
       const ss = senderState.current.get(transferId);
       if (!ss) return;
       ss.inFlight = Math.max(0, ss.inFlight - 1);
+      if (!ss.chunksAcked) ss.chunksAcked = 0;
+      ss.chunksAcked++;
+
+      // Compute round-trip latency for this chunk
+      let latencyMs = null;
+      if (ss.chunkSendTimes && ss.chunkSendTimes[chunkIndex] != null) {
+        latencyMs = Date.now() - ss.chunkSendTimes[chunkIndex];
+        delete ss.chunkSendTimes[chunkIndex];
+      }
+
       updateTransfer(transferId, {
         status: 'TRANSFERRING',
         progress: progressPercent,
         bytesTransferred,
         speedBytesPerSecond,
         etaSeconds,
+        inFlight: ss.inFlight,
+        chunksAcked: ss.chunksAcked,
+        ...(latencyMs != null ? { latencyMs } : {}),
       });
       sendNextChunks(transferId);
     };
@@ -136,16 +153,28 @@ export function TransferProvider({ children }) {
         rs = {
           chunks: new Array(totalChunks),
           received: 0,
+          retransmits: 0,
           fileName: meta?.fileName || 'download',
           fileType: meta?.fileType || 'application/octet-stream',
         };
         receiverState.current.set(transferId, rs);
       }
+      // Detect retransmit: slot already filled
+      if (rs.chunks[chunkIndex] != null) {
+        rs.retransmits++;
+      }
       rs.chunks[chunkIndex] = chunkData;
-      rs.received++;
+      rs.received = Math.min(rs.received + 1, totalChunks);
       const progress = Math.floor((rs.received / totalChunks) * 100);
       const bytesReceived = rs.received * CHUNK_SIZE;
-      updateTransfer(transferId, { status: 'TRANSFERRING', progress, bytesReceived });
+      updateTransfer(transferId, {
+        status: 'TRANSFERRING',
+        progress,
+        bytesReceived,
+        chunksReceived: rs.received,
+        totalChunks,
+        retransmits: rs.retransmits,
+      });
       // Send application-level ACK
       if (socket) {
         socket.emit('CHUNK_ACK', { transferId, chunkIndex });

@@ -1,6 +1,6 @@
 /**
- * DropShare — Sender Mode Component
- * Dedicated high-speed file sending panel.
+ * RHEO — Sender Mode Component
+ * Clean layout for choosing file, discovering receivers via radar, and streaming files.
  */
 import { useState } from 'react';
 import { useTransfer } from '../contexts/TransferContext';
@@ -31,7 +31,6 @@ export default function SenderMode() {
       recipients.forEach(r => { usernameMap[r.id] = r.username; });
       await sendFile(file, recipients.map(r => r.id), usernameMap);
       setFile(null);
-      setRecipients([]);
     } catch (err) {
       setSendError(err.message);
     } finally {
@@ -39,101 +38,109 @@ export default function SenderMode() {
     }
   };
 
+  // Filter transfers to only show outgoing transfers
   const transferList = Array.from(transfers.values());
-  const outboundTransfers = transferList.filter(t => t.direction === 'sending');
-  const activeSends = outboundTransfers.filter(t => ['PENDING','ACCEPTED','TRANSFERRING','PAUSED'].includes(t.status));
-  const completedSends = outboundTransfers.filter(t => ['COMPLETED','CANCELLED','FAILED','REJECTED','INTERRUPTED'].includes(t.status));
+  const mySentTransfers = transferList.filter(t => t.direction === 'sending');
+  const activeSends = mySentTransfers.filter(t => ['PENDING', 'ACCEPTED', 'TRANSFERRING', 'PAUSED'].includes(t.status));
+  const completedSends = mySentTransfers.filter(t => ['COMPLETED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(t.status));
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in">
-      {/* ── Left Column: Send Configuration ────────────────────────────── */}
-      <div className="lg:col-span-5 space-y-6">
-        <div className="card-glass p-6 space-y-5 card-glow-brand border border-brand-500/20">
-          <div className="flex items-center justify-between pb-3 border-b border-surface-600/50">
-            <div>
-              <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                <svg className="w-5 h-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-                Send Files
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">Select a file and choose recipients</p>
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in">
+      {/* ── Left Column: Compose Transfer ─────────────────────────────────── */}
+      <div className="lg:col-span-6 space-y-6">
+        <div className="card-clean p-6 sm:p-8 space-y-6">
+          <div className="border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-2 text-xs font-bold text-teal-700 uppercase tracking-wider">
+              <span className="w-2 h-2 rounded-full bg-teal-500" />
+              Initiate Outgoing Stream
             </div>
-            <span className="text-xs px-2.5 py-1 rounded-full bg-brand-500/10 text-brand-300 font-mono">
-              P2P Stream
-            </span>
+            <h2 className="text-2xl font-extrabold text-slate-900 mt-1">Send Files Instantly</h2>
+            <p className="text-xs text-slate-500 mt-1">Files are chunked and streamed directly over WebSocket relay with SHA-256 integrity.</p>
           </div>
 
-          {/* Dropzone */}
-          <div>
-            <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">1. Choose File</label>
+          {/* Step 1: Dropzone */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+              1. Select File
+            </label>
             <DropZone file={file} onFileSelect={setFile} />
           </div>
 
-
-          {/* User Search & Selection */}
-          <div>
-            <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">2. Select Recipients</label>
+          {/* Step 2: User Search & Selection */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                2. Target Receiver Node
+              </label>
+              {recipients.length > 0 && (
+                <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-100">
+                  {recipients.length} Selected
+                </span>
+              )}
+            </div>
             <UserSearch selected={recipients} onToggle={toggleRecipient} />
           </div>
 
+          {/* Error display */}
           {sendError && (
-            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-center gap-2">
-              <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              {sendError}
+            <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700 flex items-center gap-2">
+              <span>⚠️</span>
+              <span>{sendError}</span>
             </div>
           )}
 
-          {/* Submit Action Button */}
+          {/* Submit Action */}
           <button
-            id="send-file-btn"
+            id="send-button"
             onClick={handleSend}
             disabled={!file || recipients.length === 0 || sending}
-            className="btn-primary w-full py-3.5 text-sm font-bold shadow-lg">
+            className="btn-teal w-full py-4 text-sm font-extrabold rounded-2xl shadow-xl shadow-teal-700/15 flex items-center justify-center gap-2"
+          >
             {sending ? (
-              <span className="flex items-center gap-2">
-                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Encrypting & Initiating Transfer…
-              </span>
+                <span>Initiating P2P Flow…</span>
+              </>
             ) : (
-              <span className="flex items-center justify-center gap-2">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              <>
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
-                Send to {recipients.length ? `${recipients.length} Recipient${recipients.length > 1 ? 's' : ''}` : 'Recipients'}
-              </span>
+                <span>Flow to {recipients.length > 0 ? `${recipients.length} Receiver${recipients.length > 1 ? 's' : ''}` : 'Recipient'}</span>
+              </>
             )}
           </button>
         </div>
       </div>
 
-      {/* ── Right Column: Outbound Activity ─────────────────────────────── */}
-      <div className="lg:col-span-7 space-y-6">
-        {/* Active Sending Streams */}
+      {/* ── Right Column: Active & Outgoing Streams ────────────────────────── */}
+      <div className="lg:col-span-6 space-y-6">
+        {/* Active Outgoing Streams */}
         <div>
-          <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center justify-between">
-            <span>Active Outbound Transfers</span>
-            {activeSends.length > 0 && (
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-brand-500/20 text-brand-300 font-semibold">
-                {activeSends.length} sending
-              </span>
-            )}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <span>Active Outgoing Streams</span>
+              {activeSends.length > 0 && (
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-100 text-teal-800 font-bold">
+                  {activeSends.length} live
+                </span>
+              )}
+            </h3>
+          </div>
 
           {activeSends.length === 0 ? (
-            <div className="card p-8 text-center text-slate-500 space-y-2 border-dashed">
-              <svg className="w-10 h-10 mx-auto text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
-              <p className="text-sm font-medium text-slate-400">No active sending streams</p>
-              <p className="text-xs text-slate-600">Select a file and recipient on the left to start sending.</p>
+            <div className="card-clean p-8 text-center text-slate-400 space-y-2 border-dashed">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
+                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </div>
+              <p className="text-sm font-bold text-slate-700">No active streams in flight</p>
+              <p className="text-xs text-slate-400">When you stream a file, real-time chunk progress will appear here.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -142,23 +149,15 @@ export default function SenderMode() {
           )}
         </div>
 
-        {/* Sent History */}
-        <div>
-          <h3 className="text-lg font-bold text-slate-100 mb-4">
-            Sent History
-          </h3>
-
-          {completedSends.length === 0 ? (
-            <div className="card p-8 text-center text-slate-500 space-y-2 border-dashed">
-              <p className="text-sm font-medium text-slate-400">No sent history yet</p>
-              <p className="text-xs text-slate-600">Past sent files will be logged here.</p>
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+        {/* Recent Outgoing History */}
+        {completedSends.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-sm font-extrabold text-slate-800">Recent Completed Sends</h3>
+            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
               {completedSends.map(t => <TransferCard key={t.transferId} transfer={t} />)}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
