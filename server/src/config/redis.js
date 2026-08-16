@@ -27,6 +27,36 @@ class MockRedis extends EventEmitter {
     return this.store.has(key) ? 1 : 0;
   }
 
+  async sadd(key, member) {
+    if (!this.store.has(key)) {
+      this.store.set(key, new Set());
+    }
+    const set = this.store.get(key);
+    if (set instanceof Set) {
+      set.add(member);
+    }
+    return 1;
+  }
+
+  async srem(key, member) {
+    if (this.store.has(key)) {
+      const set = this.store.get(key);
+      if (set instanceof Set) {
+        set.delete(member);
+      }
+    }
+    return 1;
+  }
+
+  async smembers(key) {
+    if (!this.store.has(key)) return [];
+    const val = this.store.get(key);
+    if (val instanceof Set) {
+      return Array.from(val);
+    }
+    return [];
+  }
+
   pipeline() {
     const operations = [];
     const chain = {

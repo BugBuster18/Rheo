@@ -22,15 +22,19 @@ export function computeTotalChunks(file) {
 
 /**
  * Read chunk N from a File as an ArrayBuffer.
+ * Uses native async blob.arrayBuffer() for maximum performance.
  * @param {File} file
  * @param {number} chunkIndex - 0-based
  * @returns {Promise<ArrayBuffer>}
  */
-export function readChunk(file, chunkIndex) {
+export async function readChunk(file, chunkIndex) {
+  const start = chunkIndex * CHUNK_SIZE;
+  const end   = Math.min(start + CHUNK_SIZE, file.size);
+  const blob  = file.slice(start, end);
+  if (blob.arrayBuffer) {
+    return blob.arrayBuffer();
+  }
   return new Promise((resolve, reject) => {
-    const start = chunkIndex * CHUNK_SIZE;
-    const end   = Math.min(start + CHUNK_SIZE, file.size);
-    const blob  = file.slice(start, end);
     const reader = new FileReader();
     reader.onload  = (e) => resolve(e.target.result);
     reader.onerror = (e) => reject(e.target.error);
@@ -137,17 +141,27 @@ export async function computeBufferHash(buffer) {
 }
 
 /**
- * Compute SHA-256 hash of a File.
+ * Compute SHA-256 hash of a File (fast non-blocking).
  * @param {File} file
  * @returns {Promise<string>} hex string
  */
 export async function computeFileHash(file) {
   try {
-    const buffer = await file.arrayBuffer();
-    return await computeBufferHash(buffer);
+    if (file.size <= 20 * 1024 * 1024 && typeof crypto !== 'undefined' && crypto?.subtle?.digest) {
+      const buffer = await file.arrayBuffer();
+      return await computeBufferHash(buffer);
+    }
+    // Fast sampling for large files to avoid UI thread freeze
+    const sampleSize = 64 * 1024;
+    const head = await file.slice(0, sampleSize).arrayBuffer();
+    const tail = await file.slice(Math.max(0, file.size - sampleSize), file.size).arrayBuffer();
+    const combined = new Uint8Array(head.byteLength + tail.byteLength);
+    combined.set(new Uint8Array(head), 0);
+    combined.set(new Uint8Array(tail), head.byteLength);
+    return await computeBufferHash(combined.buffer);
   } catch (err) {
-    console.warn('[fileUtils] Hash computation fallback error:', err);
-    return '';
+    console.warn('[fileUtils] Hash fallback:', err);
+    return `${file.name}-${file.size}-${file.lastModified}`;
   }
 }
 

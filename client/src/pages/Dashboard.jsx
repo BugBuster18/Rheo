@@ -11,6 +11,7 @@ import SenderMode from '../components/SenderMode';
 import ReceiverMode from '../components/ReceiverMode';
 import ProfileModal from '../components/ProfileModal';
 import IncomingRequests from '../components/IncomingRequests';
+import { getSocket } from '../services/socket';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -18,12 +19,24 @@ export default function Dashboard() {
   const [mode, setMode] = useState('sender'); // 'sender' | 'receiver'
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [currentAvatar, setCurrentAvatar] = useState(() => {
-    return localStorage.getItem('ds_avatar') || 'flow-teal';
+    return localStorage.getItem('rheo_avatar') || localStorage.getItem('ds_avatar') || 'fox';
   });
 
   const handleSelectAvatar = (avatarId) => {
     setCurrentAvatar(avatarId);
+    localStorage.setItem('rheo_avatar', avatarId);
     localStorage.setItem('ds_avatar', avatarId);
+
+    const avatarIndexMap = {
+      fox: 0, panda: 1, cat: 2, dog: 3, rabbit: 4, bear: 5, koala: 6, penguin: 7,
+      frog: 8, hamster: 9, wolf: 10, duck: 11, pig: 12, tiger: 13, lion: 14, monkey: 15
+    };
+    const avatarIndex = avatarIndexMap[avatarId] ?? 0;
+
+    const socket = getSocket();
+    if (socket) {
+      socket.emit('UPDATE_AVATAR', { avatarId, avatarIndex });
+    }
   };
 
   // If there are pending incoming requests and user is on sender mode, give subtle cue

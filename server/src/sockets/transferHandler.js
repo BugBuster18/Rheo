@@ -41,30 +41,31 @@ function register(io, socket) {
       if (fileSize > config.MAX_FILE_SIZE_BYTES) {
         return ack(callback, false, 'File exceeds maximum allowed size');
       }
-      // Prevent a user from sending to themselves
-      if (receiverIds.includes(senderId)) {
-        return ack(callback, false, 'Cannot send to yourself');
-      }
-
-      // Create group + one transfer per receiver in PostgreSQL
-      const { groupId, transfers } = await transferService.createTransferGroup({
+      const crypto = require('crypto');
+      const groupId = crypto.randomUUID();
+      const transfers = receiverIds.map(receiverId => ({
+        id: crypto.randomUUID(),
+        groupId,
         senderId,
+        receiverId,
         fileName,
         fileSize,
+        fileType,
         totalChunks,
-        fileHash,
-        receiverIds,
-      });
+        fileHash: fileHash || '',
+        status: TRANSFER_STATUS.PENDING,
+      }));
 
-      logger.info('TRANSFER_REQUEST created', { senderId, groupId, receivers: receiverIds.length });
+      // Register in-memory instantly (< 1ms)
+      for (const t of transfers) {
+        transferManager.registerPendingTransfer(t);
+      }
 
-      // Fetch sender profile to get clean username
-      const senderUser = await userService.getUserById(senderId);
-      const senderUsername = senderUser?.displayName || senderUser?.username || socket.handshake.auth?.username || 'Sender';
+      const senderUsername = socket.username || socket.handshake.auth?.username || 'Sender';
 
-      // Route the request to each receiver (possibly on a different EC2 instance)
+      // Route the request to each receiver immediately
       for (const transfer of transfers) {
-        const receiverId = transfer.receiverId || transfer.receiver_id;
+        const receiverId = transfer.receiverId;
         const requestPayload = {
           transferId:  transfer.id,
           groupId,
@@ -74,14 +75,28 @@ function register(io, socket) {
           fileSize,
           fileType,
           totalChunks,
-          fileHash,
+          fileHash: transfer.fileHash,
         };
 
-        await routeEventToUser(io, receiverId, SOCKET_EVENTS.TRANSFER_REQUEST, requestPayload);
+        routeEventToUser(io, receiverId, SOCKET_EVENTS.TRANSFER_REQUEST, requestPayload);
       }
 
-
+      // Respond to sender immediately without waiting for database I/O
       ack(callback, true, 'Transfer request sent', { groupId, transfers });
+
+      // Persist in database asynchronously in background with matching UUIDs
+      transferService.createTransferGroup({
+        senderId,
+        fileName,
+        fileSize,
+        totalChunks,
+        fileHash,
+        receiverIds,
+        groupId,
+        predefinedTransfers: transfers,
+      }).catch(err => {
+        logger.warn('Background transfer create failed', { error: err.message });
+      });
     } catch (err) {
       logger.error('TRANSFER_REQUEST error', { senderId, error: err.message });
       ack(callback, false, 'Failed to create transfer request');
@@ -94,49 +109,66 @@ function register(io, socket) {
     const { transferId } = data;
 
     try {
-      const { authorized, transfer, reason } = await transferService.verifyTransferAuthorization(
-        transferId, receiverId, 'receiver'
-      );
-      if (!authorized) {
-        return ack(callback, false, reason || 'Unauthorized');
+      const pending = transferManager.getPendingTransfer(transferId);
+      let senderId, fileName, fileSize, totalChunks, fileHash, groupId;
+
+      if (pending) {
+        if (pending.receiverId !== receiverId) {
+          return ack(callback, false, 'Unauthorized');
+        }
+        senderId = pending.senderId;
+        fileName = pending.fileName;
+        fileSize = pending.fileSize;
+        totalChunks = pending.totalChunks;
+        fileHash = pending.fileHash;
+        groupId = pending.groupId;
+        transferManager.removePendingTransfer(transferId);
+      } else {
+        // Fallback to database lookup if not found in memory
+        const { authorized, transfer, reason } = await transferService.verifyTransferAuthorization(
+          transferId, receiverId, 'receiver'
+        );
+        if (!authorized) {
+          return ack(callback, false, reason || 'Unauthorized');
+        }
+        senderId = transfer.sender_id || transfer.senderId;
+        fileName = transfer.file_name || transfer.fileName;
+        fileSize = transfer.file_size || transfer.fileSize;
+        totalChunks = transfer.total_chunks || transfer.totalChunks;
+        fileHash = transfer.file_hash || transfer.fileHash;
+        groupId = transfer.group_id || transfer.groupId;
       }
-      if (transfer.status !== TRANSFER_STATUS.PENDING) {
-        return ack(callback, false, `Transfer is already ${transfer.status}`);
-      }
 
-      // Mark accepted in DB
-      await transferService.updateTransferStatus(transferId, TRANSFER_STATUS.ACCEPTED);
-
-      const senderId = transfer.sender_id || transfer.senderId;
-      const receiverIdVal = transfer.receiver_id || transfer.receiverId;
-
-      // Register in-memory state for the active transfer
+      // Register active transfer in-memory instantly (< 1ms)
       const activeTransfer = transferManager.createActiveTransfer({
         transferId,
-        groupId:     transfer.group_id || transfer.groupId,
+        groupId,
         senderId,
-        receiverId:  receiverIdVal,
-        fileName:    transfer.file_name || transfer.fileName,
-        fileSize:    transfer.file_size || transfer.fileSize,
-        totalChunks: transfer.total_chunks || transfer.totalChunks,
-        fileHash:    transfer.file_hash || transfer.fileHash,
-        lastConfirmedChunk: transfer.last_confirmed_chunk ?? transfer.lastConfirmedChunk,
+        receiverId,
+        fileName,
+        fileSize,
+        totalChunks,
+        fileHash,
+        lastConfirmedChunk: -1,
       });
 
       if (activeTransfer) {
         activeTransfer.status = TRANSFER_STATUS.TRANSFERRING;
       }
 
-      logger.info('Transfer accepted', { transferId, receiverId });
-
-      // Tell sender to start sending chunks
-      await routeEventToUser(io, senderId, SOCKET_EVENTS.TRANSFER_START, {
+      // Tell sender to start streaming chunks immediately!
+      routeEventToUser(io, senderId, SOCKET_EVENTS.TRANSFER_START, {
         transferId,
-        receiverId: receiverIdVal,
-        lastConfirmedChunk: transfer.last_confirmed_chunk ?? transfer.lastConfirmedChunk,
+        receiverId,
+        lastConfirmedChunk: -1,
       });
 
       ack(callback, true, 'Transfer accepted');
+
+      // Update PostgreSQL in background
+      transferService.updateTransferStatus(transferId, TRANSFER_STATUS.ACCEPTED).catch(err => {
+        logger.warn('Background transfer accept status update error', { error: err.message });
+      });
     } catch (err) {
       logger.error('TRANSFER_ACCEPT error', { receiverId, transferId, error: err.message });
       ack(callback, false, 'Failed to accept transfer');
@@ -195,6 +227,68 @@ function register(io, socket) {
     } catch (err) {
       logger.error('TRANSFER_CANCEL error', { userId, transferId, error: err.message });
       ack(callback, false, 'Failed to cancel transfer');
+    }
+  });
+
+  // ── WEBRTC_SIGNAL (Zero-Data P2P Local LAN Signaling) ──────────
+  socket.on(SOCKET_EVENTS.WEBRTC_SIGNAL, async (data, callback) => {
+    const senderId = socket.userId;
+    const { transferId, targetUserId, signal } = data;
+
+    if (!targetUserId || !signal) {
+      return ack(callback, false, 'Invalid WebRTC signal payload');
+    }
+
+    try {
+      logger.debug('Relaying WebRTC P2P signal', { transferId, from: senderId, to: targetUserId, signalType: signal.type });
+      await routeEventToUser(io, targetUserId, SOCKET_EVENTS.WEBRTC_SIGNAL, {
+        transferId,
+        senderId,
+        signal,
+      });
+      ack(callback, true, 'Signal relayed');
+    } catch (err) {
+      logger.error('WEBRTC_SIGNAL relay error', { senderId, targetUserId, error: err.message });
+      ack(callback, false, 'Failed to relay WebRTC signal');
+    }
+  });
+
+  // ── GET_LOCAL_PEERS (Scan current connected users on local network) ──
+  socket.on('GET_LOCAL_PEERS', async (_data, callback) => {
+    const userId = socket.userId;
+    const networkGroup = socket.networkGroup || 'default';
+
+    try {
+      const { getLocalNetworkUserIds } = require('../redis/presence');
+      const localUserIds = await getLocalNetworkUserIds(networkGroup, userId);
+
+      if (!localUserIds || localUserIds.length === 0) {
+        return ack(callback, true, 'No other local peers found', { peers: [], networkGroup });
+      }
+
+      const { getUserPresence } = require('../redis/presence');
+      const peers = [];
+      for (const id of localUserIds) {
+        const u = await userService.getUserById(id);
+        const presence = await getUserPresence(id);
+        if (u) {
+          peers.push({
+            id: u.id,
+            username: u.username,
+            displayName: u.displayName,
+            avatarIndex: presence?.avatarIndex ?? null,
+            avatarId: presence?.avatarId ?? null,
+            online: true,
+            isLocal: true,
+            networkGroup,
+          });
+        }
+      }
+
+      ack(callback, true, 'Local peers found', { peers, networkGroup });
+    } catch (err) {
+      logger.error('GET_LOCAL_PEERS error', { userId, error: err.message });
+      ack(callback, false, 'Failed to retrieve local peers', { peers: [] });
     }
   });
 }

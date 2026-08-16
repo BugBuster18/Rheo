@@ -107,9 +107,11 @@ function register(io, socket) {
     // Update in-memory progress
     const shouldCheckpoint = state.acknowledgeChunk(chunkIndex, config.DB_CHECKPOINT_INTERVAL);
 
-    // Checkpoint to PostgreSQL at intervals — not every ACK
+    // Checkpoint to PostgreSQL asynchronously in background — never block real-time chunk flow
     if (shouldCheckpoint) {
-      await transferService.checkpointTransfer(transferId, state.lastConfirmedChunk);
+      transferService.checkpointTransfer(transferId, state.lastConfirmedChunk).catch(err => {
+        logger.warn('Background checkpoint failed', { transferId, error: err.message });
+      });
     }
 
     // Forward ACK to sender user room

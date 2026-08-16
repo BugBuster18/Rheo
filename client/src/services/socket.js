@@ -32,8 +32,15 @@ export function initSocket(token) {
   }
 
   currentToken = token;
+  const savedAvatar = localStorage.getItem('rheo_avatar') || localStorage.getItem('ds_avatar') || 'fox';
+  const avatarIndexMap = {
+    fox: 0, panda: 1, cat: 2, dog: 3, rabbit: 4, bear: 5, koala: 6, penguin: 7,
+    frog: 8, hamster: 9, wolf: 10, duck: 11, pig: 12, tiger: 13, lion: 14, monkey: 15
+  };
+  const avatarIndex = avatarIndexMap[savedAvatar] ?? 0;
+
   socket = io(getSocketUrl(), {
-    auth: { token },
+    auth: { token, avatarId: savedAvatar, avatarIndex },
     transports: ['websocket', 'polling'],
     reconnectionAttempts: 10,
     reconnectionDelay: 1500,

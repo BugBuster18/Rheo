@@ -91,9 +91,22 @@ export default function TransferStats({ transfer }) {
             <span className="absolute w-6 h-6 rounded-full bg-teal-500/20 animate-ping" />
             <span className="w-3 h-3 rounded-full bg-teal-600 relative z-10" />
           </div>
-          <span className="text-xs font-bold text-slate-800 font-mono">
-            {isSending ? 'Streaming chunks' : 'Receiving chunks'}{dots}
-          </span>
+          <div>
+            <span className="text-xs font-bold text-slate-800 font-mono">
+              {isSending ? 'Streaming chunks' : 'Receiving chunks'}{dots}
+            </span>
+            <div className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 mt-0.5">
+              {transfer.transferMode === 'LOCAL_P2P' || transfer.isZeroData ? (
+                <>
+                  <span>⚡ Direct LAN (0 Data Used)</span>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-slate-500 font-normal">No internet consumed</span>
+                </>
+              ) : (
+                <span className="text-slate-500 font-normal">🌐 Cloud Relay Active</span>
+              )}
+            </div>
+          </div>
         </div>
         <span className="text-xs font-extrabold text-teal-700 font-mono">
           {formatBytes(bytes)} / {formatBytes(fileSize)}

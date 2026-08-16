@@ -1,36 +1,57 @@
 /**
- * RHEO — Sender Mode Component
- * Clean layout for choosing file, discovering receivers via radar, and streaming files.
+ * RHEO — Sender Mode Component (Multi-Peer Selection Flow)
+ *
+ * Flow:
+ * 1. User sees clean white & transparent green circular Radar.
+ * 2. User taps one or more peers to select them (showing checkmarks).
+ * 3. User clicks the prominent "Send Files" button below the radar.
+ * 4. Native file picker opens -> selected file streams to all chosen recipients!
  */
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useTransfer } from '../contexts/TransferContext';
-import DropZone from './DropZone';
-import UserSearch from './UserSearch';
+import RadarScanner from './RadarScanner';
 import TransferCard from './TransferCard';
 
 export default function SenderMode() {
   const { transfers, sendFile } = useTransfer();
 
-  const [file, setFile]             = useState(null);
   const [recipients, setRecipients] = useState([]);
   const [sending, setSending]       = useState(false);
   const [sendError, setSendError]   = useState('');
 
-  const toggleRecipient = (u) => {
+  const fileInputRef = useRef(null);
+
+  // Toggle selection for multiple peers
+  const toggleRecipient = (peer) => {
     setRecipients(prev =>
-      prev.some(r => r.id === u.id) ? prev.filter(r => r.id !== u.id) : [...prev, u]
+      prev.some(r => r.id === peer.id)
+        ? prev.filter(r => r.id !== peer.id)
+        : [...prev, peer]
     );
+    setSendError('');
   };
 
-  const handleSend = async () => {
+  // When user clicks the prominent Send Files button:
+  const handlePromptFilePicker = () => {
+    if (recipients.length === 0) return;
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  // Once a file is chosen from the native file dialog:
+  const handleFileChosen = async (e) => {
+    const file = e.target.files?.[0];
     if (!file || recipients.length === 0) return;
+
     setSending(true);
     setSendError('');
     try {
       const usernameMap = {};
       recipients.forEach(r => { usernameMap[r.id] = r.username; });
       await sendFile(file, recipients.map(r => r.id), usernameMap);
-      setFile(null);
+      setRecipients([]); // Reset selection after starting transfer
     } catch (err) {
       setSendError(err.message);
     } finally {
@@ -38,48 +59,49 @@ export default function SenderMode() {
     }
   };
 
-  // Filter transfers to only show outgoing transfers
+  // Filter transfers to only show outgoing transfers (sorted most recent & active first)
   const transferList = Array.from(transfers.values());
-  const mySentTransfers = transferList.filter(t => t.direction === 'sending');
+  const mySentTransfers = transferList
+    .filter(t => t.direction === 'sending')
+    .sort((a, b) => {
+      const statusOrder = { TRANSFERRING: 0, ACCEPTED: 1, PENDING: 2, PAUSED: 3, COMPLETED: 4, FAILED: 5, CANCELLED: 6 };
+      const orderA = statusOrder[a.status] ?? 99;
+      const orderB = statusOrder[b.status] ?? 99;
+      if (orderA !== orderB) return orderA - orderB;
+      return (new Date(b.createdAt || b.updatedAt || 0)) - (new Date(a.createdAt || a.updatedAt || 0));
+    });
+
   const activeSends = mySentTransfers.filter(t => ['PENDING', 'ACCEPTED', 'TRANSFERRING', 'PAUSED'].includes(t.status));
   const completedSends = mySentTransfers.filter(t => ['COMPLETED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(t.status));
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in">
-      {/* ── Left Column: Compose Transfer ─────────────────────────────────── */}
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in max-w-6xl mx-auto">
+      {/* Hidden native file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleFileChosen}
+      />
+
+      {/* ── Left Column: Clean White & Transparent Green Circular Radar ────── */}
       <div className="lg:col-span-6 space-y-6">
-        <div className="card-clean p-6 sm:p-8 space-y-6">
-          <div className="border-b border-slate-100 pb-4">
-            <div className="flex items-center gap-2 text-xs font-bold text-teal-700 uppercase tracking-wider">
-              <span className="w-2 h-2 rounded-full bg-teal-500" />
-              Initiate Outgoing Stream
-            </div>
-            <h2 className="text-2xl font-extrabold text-slate-900 mt-1">Send Files Instantly</h2>
-            <p className="text-xs text-slate-500 mt-1">Files are chunked and streamed directly over WebSocket relay with SHA-256 integrity.</p>
+        <div className="card-clean p-5 sm:p-7 space-y-4 bg-white shadow-sm border border-slate-200/90 rounded-3xl">
+          <div className="text-center space-y-1">
+            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900">
+              Select Device(s) & Send
+            </h2>
+            <p className="text-xs text-slate-500">
+              Tap one or multiple users on the radar, then click Send to stream files.
+            </p>
           </div>
 
-          {/* Step 1: Dropzone */}
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-              1. Select File
-            </label>
-            <DropZone file={file} onFileSelect={setFile} />
-          </div>
-
-          {/* Step 2: User Search & Selection */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                2. Target Receiver Node
-              </label>
-              {recipients.length > 0 && (
-                <span className="text-xs font-bold text-teal-700 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-100">
-                  {recipients.length} Selected
-                </span>
-              )}
-            </div>
-            <UserSearch selected={recipients} onToggle={toggleRecipient} />
-          </div>
+          {/* Clean White + Transparent Green Circular Radar */}
+          <RadarScanner
+            selected={recipients}
+            onToggle={toggleRecipient}
+            onSendFiles={handlePromptFilePicker}
+          />
 
           {/* Error display */}
           {sendError && (
@@ -88,59 +110,34 @@ export default function SenderMode() {
               <span>{sendError}</span>
             </div>
           )}
-
-          {/* Submit Action */}
-          <button
-            id="send-button"
-            onClick={handleSend}
-            disabled={!file || recipients.length === 0 || sending}
-            className="btn-teal w-full py-4 text-sm font-extrabold rounded-2xl shadow-xl shadow-teal-700/15 flex items-center justify-center gap-2"
-          >
-            {sending ? (
-              <>
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span>Initiating P2P Flow…</span>
-              </>
-            ) : (
-              <>
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                </svg>
-                <span>Flow to {recipients.length > 0 ? `${recipients.length} Receiver${recipients.length > 1 ? 's' : ''}` : 'Recipient'}</span>
-              </>
-            )}
-          </button>
         </div>
       </div>
 
-      {/* ── Right Column: Active & Outgoing Streams ────────────────────────── */}
+      {/* ── Right Column: Live Transfers & History ─────────────────────────── */}
       <div className="lg:col-span-6 space-y-6">
         {/* Active Outgoing Streams */}
-        <div>
-          <div className="flex items-center justify-between mb-4">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
             <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-              <span>Active Outgoing Streams</span>
+              <span>Active Transfers</span>
               {activeSends.length > 0 && (
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-100 text-teal-800 font-bold">
-                  {activeSends.length} live
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                  {activeSends.length} active
                 </span>
               )}
             </h3>
           </div>
 
           {activeSends.length === 0 ? (
-            <div className="card-clean p-8 text-center text-slate-400 space-y-2 border-dashed">
+            <div className="card-clean p-8 text-center text-slate-400 space-y-2 border-dashed rounded-3xl bg-slate-50/50">
               <div className="w-12 h-12 mx-auto rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
               </div>
-              <p className="text-sm font-bold text-slate-700">No active streams in flight</p>
-              <p className="text-xs text-slate-400">When you stream a file, real-time chunk progress will appear here.</p>
+              <p className="text-sm font-bold text-slate-700">No active transfers</p>
+              <p className="text-xs text-slate-400">Select users on the radar and click Send to stream files.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -148,16 +145,6 @@ export default function SenderMode() {
             </div>
           )}
         </div>
-
-        {/* Recent Outgoing History */}
-        {completedSends.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="text-sm font-extrabold text-slate-800">Recent Completed Sends</h3>
-            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-              {completedSends.map(t => <TransferCard key={t.transferId} transfer={t} />)}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

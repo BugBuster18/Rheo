@@ -17,6 +17,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/search',      userController.searchUsers);
+router.get('/local',       userController.getLocalUsers);
 router.get('/:id/status',  userController.getUserStatus);
 
 module.exports = router;

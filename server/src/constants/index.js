@@ -46,6 +46,10 @@ const SOCKET_EVENTS = {
   CHUNK:                    'CHUNK',               // Sender → Server → Receiver
   CHUNK_ACK:                'CHUNK_ACK',           // Receiver → Server → Sender
 
+  // ── WebRTC Zero-Data Local Transfer Signaling ─────────────────
+  WEBRTC_SIGNAL:            'WEBRTC_SIGNAL',       // Signaling for direct P2P local LAN stream
+  LOCAL_PEERS_UPDATE:       'LOCAL_PEERS_UPDATE',  // Broadcast when local network peers change
+
   // ── Pause / Resume ────────────────────────────────────────────
   PAUSE_TRANSFER:           'PAUSE_TRANSFER',
   PAUSE_ACK:                'PAUSE_ACK',
