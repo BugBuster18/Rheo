@@ -13,7 +13,7 @@ import { formatBytes, formatSpeed, formatEta } from '../utils/fileUtils';
 import { assembleFileBlobFromStorage } from '../services/chunkStorage';
 
 export default function TransferCard({ transfer }) {
-  const { cancelTransfer, pauseTransfer, resumeTransfer } = useTransfer();
+  const { cancelTransfer, pauseTransfer, resumeTransfer, dismissTransfer } = useTransfer();
   const {
     transferId,
     direction,
@@ -93,7 +93,7 @@ export default function TransferCard({ transfer }) {
           </div>
         </div>
 
-        {/* Status Pill */}
+        {/* Status Pill & Dismiss ✕ Button */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold border ${
             status === 'COMPLETED'
@@ -106,6 +106,14 @@ export default function TransferCard({ transfer }) {
           }`}>
             {status === 'TRANSFERRING' ? 'Streaming' : status === 'COMPLETED' ? 'Done' : status}
           </span>
+
+          <button
+            onClick={() => dismissTransfer(transferId)}
+            className="w-6 h-6 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center text-xs font-bold transition-all cursor-pointer"
+            title="Remove/Dismiss stream"
+          >
+            ✕
+          </button>
         </div>
       </div>
 

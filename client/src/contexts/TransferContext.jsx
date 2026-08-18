@@ -259,13 +259,22 @@ export function TransferProvider({ children }) {
       totalChunks: rs.totalChunks,
     });
 
+    const totalBytesExpected = meta?.fileSize || (rs.totalChunks * CHUNK_SIZE);
     const progress = Math.floor((rs.received / rs.totalChunks) * 100);
-    const bytesReceived = rs.received * CHUNK_SIZE;
+    const bytesReceived = Math.min(totalBytesExpected, rs.received * CHUNK_SIZE);
+
+    if (!rs.startTime) rs.startTime = Date.now();
+    const elapsedSec = Math.max(0.05, (Date.now() - rs.startTime) / 1000);
+    const speedBytesPerSecond = Math.round(bytesReceived / elapsedSec);
+    const remainingBytes = Math.max(0, totalBytesExpected - bytesReceived);
+    const etaSeconds = speedBytesPerSecond > 0 ? Math.ceil(remainingBytes / speedBytesPerSecond) : 0;
 
     updateTransfer(transferId, {
       status: 'TRANSFERRING',
       progress,
       bytesReceived,
+      speedBytesPerSecond,
+      etaSeconds,
       chunksReceived: rs.received,
       totalChunks: rs.totalChunks,
       retransmits: rs.retransmits,
@@ -648,6 +657,44 @@ export function TransferProvider({ children }) {
     return localPeers.some(p => p.id === userId);
   }, [localPeers]);
 
+  const dismissTransfer = useCallback((transferId) => {
+    const socket = getSocket();
+    if (socket) {
+      socket.emit('TRANSFER_CANCEL', { transferId }, () => {});
+    }
+    const ss = senderState.current.get(transferId);
+    if (ss) ss.active = false;
+    senderState.current.delete(transferId);
+    receiverState.current.delete(transferId);
+    receiverMetadata.current.delete(transferId);
+
+    setPendingRequests(prev => prev.filter(r => r.transferId !== transferId));
+    setTransfers(prev => {
+      const next = new Map(prev);
+      next.delete(transferId);
+      return next;
+    });
+  }, []);
+
+  const clearAbortedTransfers = useCallback(() => {
+    setTransfers(prev => {
+      const next = new Map();
+      for (const [id, t] of prev.entries()) {
+        if (t.status === 'COMPLETED') {
+          next.set(id, t);
+        } else {
+          const ss = senderState.current.get(id);
+          if (ss) ss.active = false;
+          senderState.current.delete(id);
+          receiverState.current.delete(id);
+          receiverMetadata.current.delete(id);
+        }
+      }
+      return next;
+    });
+    setPendingRequests([]);
+  }, []);
+
   return (
     <TransferContext.Provider value={{
       transfers,
@@ -665,6 +712,8 @@ export function TransferProvider({ children }) {
       acceptTransfer,
       rejectTransfer,
       cancelTransfer,
+      dismissTransfer,
+      clearAbortedTransfers,
       pauseTransfer,
       resumeTransfer,
     }}>

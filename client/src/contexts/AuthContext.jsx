@@ -1,7 +1,7 @@
 /**
- * DropShare — Auth Context
+ * RHEO — Auth Context
  *
- * Provides: { user, token, login, logout, isAuthenticated }
+ * Provides: { user, token, login, guestLogin, logout, isAuthenticated }
  */
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
@@ -18,6 +18,17 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (username, password) => {
     const res = await api.post('/auth/login', { username, password });
+    const { token: t, user: u } = res.data.data;
+    localStorage.setItem('ds_token', t);
+    localStorage.setItem('ds_user', JSON.stringify(u));
+    initSocket(t);
+    setToken(t);
+    setUser(u);
+    return u;
+  }, []);
+
+  const guestLogin = useCallback(async (guestUsername) => {
+    const res = await api.post('/auth/guest', { username: guestUsername });
     const { token: t, user: u } = res.data.data;
     localStorage.setItem('ds_token', t);
     localStorage.setItem('ds_user', JSON.stringify(u));
@@ -44,7 +55,7 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{ user, token, login, guestLogin, logout, isAuthenticated: !!token }}>
       {children}
     </AuthContext.Provider>
   );
@@ -55,4 +66,3 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
   return ctx;
 }
-

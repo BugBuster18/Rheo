@@ -58,6 +58,14 @@ async function searchUsers(query, requesterId) {
  * @returns {Promise<Object|null>}
  */
 async function getUserById(userId) {
+  if (typeof userId === 'string' && userId.startsWith('guest_')) {
+    return {
+      id: userId,
+      username: `Guest-${userId.slice(-4)}`,
+      displayName: 'Guest User',
+      isGuest: true,
+    };
+  }
   const user = await prisma.user.findUnique({
     where:  { id: userId },
     select: { id: true, username: true, displayName: true, lastSeen: true },

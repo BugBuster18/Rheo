@@ -47,6 +47,7 @@ const presenceHandler = require('./presenceHandler');
 const transferHandler = require('./transferHandler');
 const chunkHandler    = require('./chunkHandler');
 const recoveryHandler = require('./recoveryHandler');
+const roomHandler     = require('./roomHandler');
 
 /**
  * Initialize Socket.IO on the HTTP server.
@@ -154,6 +155,7 @@ function extractNetworkGroup(socket) {
     transferHandler.register(io, socket);
     chunkHandler.register(io, socket);
     recoveryHandler.register(io, socket);
+    roomHandler.register(io, socket);
 
     // ── Disconnect ─────────────────────────────────────────────
     socket.on('disconnect', async (reason) => {

@@ -1,6 +1,6 @@
 /**
  * RHEO — Login / Register Auth Page
- * Clean off-white + teal design with animated background.
+ * Clean off-white + teal design with animated background + Quick Guest Local Share option.
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -15,7 +15,13 @@ export default function AuthPage() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError]           = useState('');
   const [loading, setLoading]       = useState(false);
-  const { login } = useAuth();
+
+  // Guest Quick Share state
+  const [showGuestModal, setShowGuestModal] = useState(false);
+  const [guestName, setGuestName]           = useState('');
+  const [guestLoading, setGuestLoading]     = useState(false);
+
+  const { login, guestLogin } = useAuth();
   const navigate  = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -37,6 +43,22 @@ export default function AuthPage() {
     }
   };
 
+  const handleGuestSubmit = async (e) => {
+    e.preventDefault();
+    if (!guestName.trim()) return;
+    setError('');
+    setGuestLoading(true);
+    try {
+      await guestLogin(guestName.trim());
+      navigate('/');
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Failed to start guest session');
+      setShowGuestModal(false);
+    } finally {
+      setGuestLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 relative overflow-hidden">
       {/* Subtle mesh grid background */}
@@ -48,8 +70,8 @@ export default function AuthPage() {
         <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] rounded-full bg-cyan-400/10 blur-[100px]" />
       </div>
 
-      <div className="w-full max-w-md relative z-10 animate-fade-in">
-        {/* Card */}
+      <div className="w-full max-w-md relative z-10 animate-fade-in space-y-4">
+        {/* Main Card */}
         <div className="bg-white/92 backdrop-blur-md border border-slate-200 rounded-3xl shadow-xl shadow-slate-900/5 overflow-hidden">
 
           {/* Brand Header Strip */}
@@ -176,12 +198,71 @@ export default function AuthPage() {
               </button>
             </form>
 
-            <p className="text-center text-xs text-slate-400 pt-1 font-mono">
-              End-to-end binary stream · SHA-256 verified · No cloud storage
-            </p>
+            <div className="pt-2 border-t border-slate-100 flex flex-col items-center gap-3">
+              {/* Quick Local Share Option */}
+              <button
+                type="button"
+                onClick={() => { setGuestName(''); setShowGuestModal(true); }}
+                className="w-full py-3 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 border border-teal-200 text-teal-800 font-extrabold text-xs transition-all flex items-center justify-center gap-2 shadow-xs"
+              >
+                <span>⚡</span> Quick Local Share (No Login Needed)
+              </button>
+
+              <p className="text-center text-[11px] text-slate-400 font-mono">
+                End-to-end binary stream · Zero mobile data · Local Wi-Fi
+              </p>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Guest Name Modal */}
+      {showGuestModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowGuestModal(false)} />
+          <div className="relative z-10 w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-6 text-white text-center space-y-1">
+              <div className="w-12 h-12 rounded-2xl bg-white/20 mx-auto flex items-center justify-center text-2xl mb-2">⚡</div>
+              <h3 className="text-lg font-black">Quick Local Share</h3>
+              <p className="text-xs text-emerald-100">No account required. Transfer files over Local Wi-Fi without internet data.</p>
+            </div>
+
+            <form onSubmit={handleGuestSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-extrabold text-slate-600 mb-1.5 uppercase tracking-wider">
+                  Temporary Username
+                </label>
+                <input
+                  type="text"
+                  value={guestName}
+                  onChange={e => setGuestName(e.target.value)}
+                  placeholder="e.g. Ganesh-Laptop"
+                  autoFocus
+                  required
+                  className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowGuestModal(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={guestLoading || !guestName.trim()}
+                  className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-extrabold shadow-md disabled:opacity-50"
+                >
+                  {guestLoading ? 'Starting…' : 'Start Sharing'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -71,6 +71,25 @@ const SOCKET_EVENTS = {
   // ── Errors ────────────────────────────────────────────────────
   TRANSFER_FAILED:          'TRANSFER_FAILED',
   ERROR:                    'ERROR',
+
+  // ── Room-Based Sharing ────────────────────────────────────────
+  ROOM_CREATE:              'ROOM_CREATE',        // Client → Server: create a room
+  ROOM_INVITE:              'ROOM_INVITE',        // Client → Server: creator invites a user
+  ROOM_REMOVE_MEMBER:       'ROOM_REMOVE_MEMBER', // Client → Server: creator removes a user
+  ROOM_LEAVE:               'ROOM_LEAVE',         // Client → Server: member leaves voluntarily
+  ROOM_DISMISS:             'ROOM_DISMISS',       // Client → Server: creator destroys room
+  ROOM_CHAT:                'ROOM_CHAT',          // Client → Server: send a chat message
+  ROOM_GET_STATE:           'ROOM_GET_STATE',     // Client → Server: get current room state
+  ROOM_FILE_SHARED:         'ROOM_FILE_SHARED',   // Server → Room:   file share notification
+
+  // Server → Client broadcasts
+  ROOM_INVITED:             'ROOM_INVITED',         // You were invited to a room
+  ROOM_MEMBER_JOINED:       'ROOM_MEMBER_JOINED',
+  ROOM_MEMBER_LEFT:         'ROOM_MEMBER_LEFT',
+  ROOM_MEMBER_REMOVED:      'ROOM_MEMBER_REMOVED',  // You were removed from a room
+  ROOM_DISMISSED:           'ROOM_DISMISSED',        // Room was destroyed by creator
+  ROOM_CHAT_MESSAGE:        'ROOM_CHAT_MESSAGE',
+  ROOM_STATE:               'ROOM_STATE',
 };
 
 // ─────────────────────────────────────────────────────────────────

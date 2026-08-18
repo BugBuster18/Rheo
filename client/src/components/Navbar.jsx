@@ -11,6 +11,7 @@ export default function Navbar({
   currentAvatar,
   onOpenProfile,
   pendingRequestsCount = 0,
+  hasActiveRoom = false,
 }) {
   return (
     <header className="sticky top-3 sm:top-4 z-40 px-3 sm:px-6 max-w-6xl mx-auto w-full">
@@ -60,6 +61,22 @@ export default function Navbar({
             <span className="text-xs">Receive</span>
             {pendingRequestsCount > 0 && (
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping absolute -top-0.5 -right-0.5" />
+            )}
+          </button>
+
+          {/* Room Mode Button */}
+          <button
+            onClick={() => setMode('room')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg sm:rounded-xl text-xs font-bold transition-all relative cursor-pointer ${
+              mode === 'room'
+                ? 'bg-gradient-to-r from-teal-600 to-cyan-600 text-white shadow-sm font-extrabold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span className="text-xs">🏠</span>
+            <span className="text-xs">Room</span>
+            {hasActiveRoom && (
+              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse absolute -top-0.5 -right-0.5" />
             )}
           </button>
         </nav>

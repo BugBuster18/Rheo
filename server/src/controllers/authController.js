@@ -71,6 +71,19 @@ async function getMe(req, res, next) {
     });
 
     if (!user) {
+      if (req.user.userId.startsWith('guest_')) {
+        return res.status(HTTP_STATUS.OK).json({
+          success: true,
+          data: {
+            user: {
+              id: req.user.userId,
+              username: 'Guest',
+              displayName: 'Guest User',
+              isGuest: true,
+            }
+          }
+        });
+      }
       return res.status(HTTP_STATUS.NOT_FOUND).json({ success: false, message: 'User not found' });
     }
 
@@ -80,4 +93,34 @@ async function getMe(req, res, next) {
   }
 }
 
-module.exports = { register, login, getMe };
+/**
+ * POST /api/auth/guest — initialize temporary guest user for local network sharing.
+ */
+async function guestLogin(req, res, next) {
+  try {
+    const crypto = require('crypto');
+    const { username } = req.body || {};
+    const cleanUsername = (username || 'Guest').trim().slice(0, 30) || 'Guest';
+    const guestId = `guest_${crypto.randomUUID().slice(0, 8)}`;
+    const token = authService.signToken(guestId);
+
+    const user = {
+      id: guestId,
+      username: cleanUsername,
+      displayName: `${cleanUsername} (Guest)`,
+      isGuest: true,
+    };
+
+    logger.info('Guest user initialized', { guestId, username: cleanUsername });
+
+    return res.status(HTTP_STATUS.OK).json({
+      success: true,
+      message: 'Guest session created',
+      data: { token, user },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { register, login, getMe, guestLogin };

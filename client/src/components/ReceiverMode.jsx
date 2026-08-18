@@ -1,35 +1,31 @@
 /**
  * RHEO — Minimal Receiver Mode Component
  *
- * Ultra-clean, minimal receiver dashboard without radar clutter:
+ * Ultra-clean, minimal receiver dashboard:
  * - Active receiving stream cards (prioritized at the top of the list).
- * - Received files history with 1-click Save/Download.
+ * - Received files history displaying top 3 recent records with 1-click Save/Download.
  */
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfer } from '../contexts/TransferContext';
 import TransferCard from './TransferCard';
 import Avatar, { getDefaultAvatar } from './Avatar';
 
-import { formatBytes } from '../utils/fileUtils';
-
 export default function ReceiverMode() {
   const { user } = useAuth();
   const {
     transfers,
     pendingRequests,
-    latestReceivedFile,
-    setLatestReceivedFile,
     acceptTransfer,
     rejectTransfer,
     autoAccept,
     toggleAutoAccept,
+    clearAbortedTransfers,
   } = useTransfer();
 
   const transferList = Array.from(transfers.values());
   const incomingTransfers = transferList
     .filter(t => t.direction === 'receiving')
     .sort((a, b) => {
-      // Prioritize active streaming first
       const statusOrder = { TRANSFERRING: 0, ACCEPTED: 1, PENDING: 2, PAUSED: 3, COMPLETED: 4, FAILED: 5, CANCELLED: 6 };
       const orderA = statusOrder[a.status] ?? 99;
       const orderB = statusOrder[b.status] ?? 99;
@@ -39,13 +35,13 @@ export default function ReceiverMode() {
 
   const activeReceives = incomingTransfers.filter(t => ['PENDING', 'ACCEPTED', 'TRANSFERRING', 'PAUSED'].includes(t.status));
   const completedReceives = incomingTransfers.filter(t => ['COMPLETED', 'CANCELLED', 'FAILED', 'REJECTED', 'INTERRUPTED'].includes(t.status));
+  const recentCompletedReceives = completedReceives.slice(0, 3);
 
   return (
     <div className="space-y-6 animate-fade-in max-w-4xl mx-auto px-2 sm:px-4">
       {/* ── Minimal Header Card ─────────────────────────────────────────── */}
       <div className="card-clean p-5 sm:p-6 bg-white border border-slate-200/90 shadow-sm rounded-3xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5 min-w-0">
-          {/* Avatar with online pulse */}
           <div className="relative flex-shrink-0">
             <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-800 shadow-xs">
               <Avatar avatarId={getDefaultAvatar(user?.username)} name={user?.username} size="sm" className="!w-9 !h-9 text-sm font-black" />
@@ -142,6 +138,15 @@ export default function ReceiverMode() {
               </span>
             )}
           </h3>
+          {activeReceives.length > 0 && (
+            <button
+              onClick={clearAbortedTransfers}
+              className="text-xs font-bold text-slate-500 hover:text-red-600 transition-colors flex items-center gap-1 cursor-pointer"
+              title="Clear all pending or stuck streams"
+            >
+              🧹 Clear Inactive
+            </button>
+          )}
         </div>
 
         {activeReceives.length === 0 ? (
@@ -155,6 +160,29 @@ export default function ReceiverMode() {
           </div>
         )}
       </div>
+
+      {/* ── Recent Completed History (Past 3 Records) ─────────────────────── */}
+      {recentCompletedReceives.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-extrabold text-slate-700 flex items-center gap-2">
+              <span>Recent Received Files</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold">
+                Top 3
+              </span>
+            </h3>
+          </div>
+          <div className="space-y-3">
+            {recentCompletedReceives.map(t => <TransferCard key={t.transferId} transfer={t} />)}
+          </div>
+
+          {completedReceives.length > 3 && (
+            <p className="text-center text-xs text-slate-500 font-semibold pt-1">
+              Showing recent 3 of {completedReceives.length} received files · Full history saved in profile
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

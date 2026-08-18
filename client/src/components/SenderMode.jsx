@@ -6,6 +6,7 @@
  * 2. User taps one or more peers to select them (showing checkmarks).
  * 3. User clicks the prominent "Send Files" button below the radar.
  * 4. Native file picker opens -> selected file streams to all chosen recipients!
+ * 5. Shows active transfers & top 3 recent completed transfers.
  */
 import { useState, useRef } from 'react';
 import { useTransfer } from '../contexts/TransferContext';
@@ -13,7 +14,7 @@ import RadarScanner from './RadarScanner';
 import TransferCard from './TransferCard';
 
 export default function SenderMode() {
-  const { transfers, sendFile } = useTransfer();
+  const { transfers, sendFile, clearAbortedTransfers } = useTransfer();
 
   const [recipients, setRecipients] = useState([]);
   const [sending, setSending]       = useState(false);
@@ -73,6 +74,7 @@ export default function SenderMode() {
 
   const activeSends = mySentTransfers.filter(t => ['PENDING', 'ACCEPTED', 'TRANSFERRING', 'PAUSED'].includes(t.status));
   const completedSends = mySentTransfers.filter(t => ['COMPLETED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(t.status));
+  const recentCompletedSends = completedSends.slice(0, 3);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in max-w-6xl mx-auto">
@@ -126,6 +128,15 @@ export default function SenderMode() {
                 </span>
               )}
             </h3>
+            {activeSends.length > 0 && (
+              <button
+                onClick={clearAbortedTransfers}
+                className="text-xs font-bold text-slate-500 hover:text-red-600 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Clear all pending or stuck streams"
+              >
+                🧹 Clear Inactive
+              </button>
+            )}
           </div>
 
           {activeSends.length === 0 ? (
@@ -145,6 +156,29 @@ export default function SenderMode() {
             </div>
           )}
         </div>
+
+        {/* Recent Outgoing History (Past 3 Records) */}
+        {recentCompletedSends.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-slate-700 flex items-center gap-2">
+                <span>Recent Outgoing Transfers</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold">
+                  Top 3
+                </span>
+              </h3>
+            </div>
+            <div className="space-y-3">
+              {recentCompletedSends.map(t => <TransferCard key={t.transferId} transfer={t} />)}
+            </div>
+
+            {completedSends.length > 3 && (
+              <p className="text-center text-xs text-slate-500 font-semibold pt-1">
+                Showing recent 3 of {completedSends.length} sent files · Full history saved in profile
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
