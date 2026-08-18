@@ -47,6 +47,7 @@ const presenceHandler = require('./presenceHandler');
 const transferHandler = require('./transferHandler');
 const chunkHandler    = require('./chunkHandler');
 const recoveryHandler = require('./recoveryHandler');
+const roomHandler     = require('./roomHandler');
 
 /**
  * Initialize Socket.IO on the HTTP server.
@@ -56,10 +57,16 @@ const recoveryHandler = require('./recoveryHandler');
 function initSocketIO(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: config.CLIENT_URL,
+      origin: (origin, callback) => {
+        if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') || origin === config.CLIENT_URL) {
+          return callback(null, true);
+        }
+        return callback(null, true);
+      },
       methods: ['GET', 'POST'],
       credentials: true,
     },
+
     // Allow larger payloads for binary chunk data.
     // Each chunk is CHUNK_SIZE_BYTES (default 1 MB) + JSON overhead.
     maxHttpBufferSize: config.CHUNK_SIZE_BYTES * 2,
@@ -90,23 +97,65 @@ function initSocketIO(httpServer) {
     }
   });
 
+function extractNetworkGroup(socket) {
+  if (socket.handshake.auth?.networkKey) {
+    return socket.handshake.auth.networkKey;
+  }
+  const rawIp = socket.handshake.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                socket.handshake.headers['x-real-ip'] ||
+                socket.conn?.remoteAddress ||
+                socket.handshake.address || '127.0.0.1';
+  const cleanIp = rawIp.replace(/^::ffff:/, '');
+
+  // If loopback or private LAN range (Wi-Fi / Mobile Hotspot / Localhost)
+  const isPrivateOrLoopback =
+    cleanIp === '127.0.0.1' ||
+    cleanIp === '::1' ||
+    cleanIp === 'localhost' ||
+    cleanIp.startsWith('192.168.') ||
+    cleanIp.startsWith('10.') ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(cleanIp);
+
+  if (isPrivateOrLoopback) {
+    return 'local_lan';
+  }
+
+  // Public IP for cloud deployments (devices on same external gateway)
+  return cleanIp;
+}
+
   // ── Connection Handler ────────────────────────────────────────
   io.on('connection', async (socket) => {
     const { userId } = socket;
     logger.info('Socket connected', { userId, socketId: socket.id });
 
+    // Extract client network group for local network peer discovery (Hotspot / LAN)
+    const networkGroup = extractNetworkGroup(socket);
+    socket.networkGroup = networkGroup;
+
+    // Join user room and local network room
+    socket.join(`user:${userId}`);
+    socket.join(`network:${networkGroup}`);
+
+    const avatarIndex = socket.handshake.auth?.avatarIndex ?? null;
+    const avatarId = socket.handshake.auth?.avatarId ?? null;
+    socket.avatarIndex = avatarIndex;
+    socket.avatarId = avatarId;
+
     // Mark user online in Redis + broadcast to other instances
-    await setUserOnline(userId, socket.id);
-    await presence.publish(SOCKET_EVENTS.USER_ONLINE, { userId });
+    await setUserOnline(userId, socket.id, networkGroup, avatarIndex, avatarId);
+    await presence.publish(SOCKET_EVENTS.USER_ONLINE, { userId, networkGroup, avatarIndex, avatarId });
 
     // Emit to all other connected clients on THIS instance
     socket.broadcast.emit(SOCKET_EVENTS.USER_ONLINE, { userId });
+    socket.to(`network:${networkGroup}`).emit(SOCKET_EVENTS.LOCAL_PEERS_UPDATE, { userId, type: 'joined' });
 
     // Register event handlers — each handler file owns its domain
     presenceHandler.register(io, socket);
     transferHandler.register(io, socket);
     chunkHandler.register(io, socket);
     recoveryHandler.register(io, socket);
+    roomHandler.register(io, socket);
 
     // ── Disconnect ─────────────────────────────────────────────
     socket.on('disconnect', async (reason) => {
@@ -116,6 +165,7 @@ function initSocketIO(httpServer) {
       await updateLastSeen(userId);
       await presence.publish(SOCKET_EVENTS.USER_OFFLINE, { userId });
       socket.broadcast.emit(SOCKET_EVENTS.USER_OFFLINE, { userId });
+      socket.to(`network:${networkGroup}`).emit(SOCKET_EVENTS.LOCAL_PEERS_UPDATE, { userId, type: 'left' });
 
       // Mark any active transfers as INTERRUPTED so they can be recovered
       await chunkHandler.handleDisconnect(userId);
@@ -123,8 +173,6 @@ function initSocketIO(httpServer) {
   });
 
   // ── Cross-Instance Event Routing via Redis ────────────────────
-  // When an event is published from another EC2 instance, relay it
-  // to the appropriate local socket if the user is connected here.
   setupRedisEventRouting(io);
 
   logger.info('Socket.IO initialized');
@@ -133,12 +181,10 @@ function initSocketIO(httpServer) {
 
 /**
  * Subscribe to Redis channels and relay events to locally-connected clients.
- * This is how EC2-1 can send events to clients connected to EC2-2.
  */
 function setupRedisEventRouting(io) {
   // Presence events from other instances
   presence.subscribe((eventName, data) => {
-    // Broadcast presence changes to all local clients so they update their UI
     io.emit(eventName, data);
   });
 
@@ -147,26 +193,12 @@ function setupRedisEventRouting(io) {
     const { targetUserId } = data;
     if (!targetUserId) return;
 
-    // Find the target user's socket on THIS instance
-    const targetSocket = findSocketByUserId(io, targetUserId);
-    if (targetSocket) {
-      targetSocket.emit(eventName, data.payload);
-      logger.debug('Cross-instance event relayed', { eventName, targetUserId });
-    }
-    // If the user isn't on this instance, no action needed —
-    // the correct instance will handle it via its own Redis subscription.
+    // Relay event to target user's room on THIS instance
+    io.to(`user:${targetUserId}`).emit(eventName, data.payload);
+    logger.debug('Cross-instance event relayed', { eventName, targetUserId });
   });
 }
 
-/**
- * Find a connected socket by userId on this instance.
- * Linear scan of connected sockets — acceptable for V1 scale.
- */
-function findSocketByUserId(io, userId) {
-  for (const [, socket] of io.sockets.sockets) {
-    if (socket.userId === userId) return socket;
-  }
-  return null;
-}
+const { findSocketByUserId } = require('./socketUtils');
 
 module.exports = { initSocketIO, findSocketByUserId };

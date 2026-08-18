@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { PresenceProvider } from './contexts/PresenceContext';
 import { TransferProvider } from './contexts/TransferContext';
+import { RoomProvider } from './contexts/RoomContext';
 import AuthPage from './pages/AuthPage';
 import Dashboard from './pages/Dashboard';
 
@@ -18,7 +19,9 @@ function AppRoutes() {
         <ProtectedRoute>
           <PresenceProvider>
             <TransferProvider>
-              <Dashboard />
+              <RoomProvider>
+                <Dashboard />
+              </RoomProvider>
             </TransferProvider>
           </PresenceProvider>
         </ProtectedRoute>

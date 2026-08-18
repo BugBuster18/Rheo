@@ -6,9 +6,14 @@
  * throughout the codebase.
  */
 
-'use strict';
+const path = require('path');
+const dotenv = require('dotenv');
 
-require('dotenv').config();
+// Load server-scoped environment variables from server/.env
+const serverEnvPath = path.resolve(__dirname, '../../.env');
+dotenv.config({ path: serverEnvPath });
+// Fallback to process.cwd() if launched differently
+dotenv.config();
 
 function requireEnv(name) {
   const value = process.env[name];

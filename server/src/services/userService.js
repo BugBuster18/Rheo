@@ -23,7 +23,7 @@ async function searchUsers(query, requesterId) {
 
   const users = await prisma.user.findMany({
     where: {
-      username: { startsWith: query.trim(), mode: 'insensitive' },
+      username: { contains: query.trim(), mode: 'insensitive' },
       id:       { not: requesterId },
     },
     select: {
@@ -35,6 +35,7 @@ async function searchUsers(query, requesterId) {
     orderBy: { username: 'asc' },
     take: 20,
   });
+
 
   if (users.length === 0) return [];
 
@@ -57,6 +58,14 @@ async function searchUsers(query, requesterId) {
  * @returns {Promise<Object|null>}
  */
 async function getUserById(userId) {
+  if (typeof userId === 'string' && userId.startsWith('guest_')) {
+    return {
+      id: userId,
+      username: `Guest-${userId.slice(-4)}`,
+      displayName: 'Guest User',
+      isGuest: true,
+    };
+  }
   const user = await prisma.user.findUnique({
     where:  { id: userId },
     select: { id: true, username: true, displayName: true, lastSeen: true },
@@ -78,10 +87,41 @@ async function isUserOnline(userId) {
  * @param {string} userId
  */
 async function updateLastSeen(userId) {
-  await prisma.user.update({
-    where: { id: userId },
-    data:  { lastSeen: new Date() },
-  });
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data:  { lastSeen: new Date() },
+    });
+  } catch (err) {
+    logger.warn('Failed to update user lastSeen', { userId, error: err.message });
+  }
 }
 
-module.exports = { searchUsers, getUserById, isUserOnline, updateLastSeen };
+/**
+ * Get active users on the same local network subnet / IP.
+ * @param {string} requesterId
+ * @param {string} networkGroup
+ * @returns {Promise<Array>}
+ */
+async function getLocalUsers(requesterId, networkGroup) {
+  const { getLocalNetworkUserIds } = require('../redis/presence');
+  const userIds = await getLocalNetworkUserIds(networkGroup, requesterId);
+  if (!userIds || userIds.length === 0) return [];
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, username: true, displayName: true, lastSeen: true },
+  });
+
+  return users.map(u => ({
+    id:          u.id,
+    username:    u.username,
+    displayName: u.displayName,
+    lastSeen:    u.lastSeen,
+    online:      true,
+    isLocal:     true,
+    networkGroup,
+  }));
+}
+
+module.exports = { searchUsers, getUserById, isUserOnline, updateLastSeen, getLocalUsers };

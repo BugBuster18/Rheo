@@ -1,44 +1,41 @@
 # ─────────────────────────────────────────────────────────────────
-# DropShare Server — Dockerfile
+# DropShare / RHEO Server — Production Dockerfile
 #
 # Multi-stage build:
-#   Stage 1 (builder): install all deps including devDeps
-#   Stage 2 (runtime): copy only production deps + source
-#
-# Runs as non-root user 'node' for security.
+#   Stage 1 (builder): install dependencies & generate Prisma client
+#   Stage 2 (runtime): lightweight production image
 # ─────────────────────────────────────────────────────────────────
 
-# ── Stage 1: Install dependencies ────────────────────────────────
+# ── Stage 1: Builder ─────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /build
 
-# Copy package files first — Docker layer caching:
-# If package.json doesn't change, npm install layer is cached
 COPY package*.json ./
-RUN npm ci --only=production
+COPY prisma ./prisma/
 
-# ── Stage 2: Production runtime ──────────────────────────────────
+RUN npm ci
+RUN npx prisma generate
+
+# ── Stage 2: Production Runtime ──────────────────────────────────
 FROM node:20-alpine AS runtime
 
-# Create app directory
 WORKDIR /app
 
-# Don't run as root — security best practice
+# Non-root user for security
 USER node
 
-# Copy only production node_modules from builder stage
+# Copy node_modules (with generated Prisma client)
 COPY --from=builder --chown=node:node /build/node_modules ./node_modules
+COPY --from=builder --chown=node:node /build/prisma ./prisma
 
-# Copy application source
+# Copy application source code
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node package.json ./
 
-# Expose the application port
 EXPOSE 5000
 
-# Health check — ALB uses GET /health to determine instance health
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD wget -qO- http://localhost:5000/health || exit 1
 
-CMD ["node", "src/server.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node src/server.js"]

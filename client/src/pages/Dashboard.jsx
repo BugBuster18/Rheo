@@ -1,156 +1,169 @@
 /**
- * DropShare — Dashboard Page
- * Main screen after login: send files, see active/past transfers.
+ * RHEO — Main Dashboard Page
+ * Orchestrates the floating dynamic navbar, active Flow mode (Send / Receive / Room),
+ * customizable avatar system, profile/activity modal, and room panel + chat.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfer } from '../contexts/TransferContext';
-import DropZone from '../components/DropZone';
-import UserSearch from '../components/UserSearch';
-import TransferCard from '../components/TransferCard';
+import { useRoom } from '../contexts/RoomContext';
+import Navbar from '../components/Navbar';
+import SenderMode from '../components/SenderMode';
+import ReceiverMode from '../components/ReceiverMode';
+import ProfileModal from '../components/ProfileModal';
 import IncomingRequests from '../components/IncomingRequests';
+import RoomPanel from '../components/RoomPanel';
+import RoomChatBox from '../components/RoomChatBox';
+import CreateRoomModal from '../components/CreateRoomModal';
+import { getSocket } from '../services/socket';
 
 export default function Dashboard() {
-  const { user, logout }    = useAuth();
-  const { transfers, sendFile } = useTransfer();
+  const { user } = useAuth();
+  const { pendingRequests } = useTransfer();
+  const { activeRoom } = useRoom();
 
-  const [file, setFile]         = useState(null);
-  const [recipients, setRecipients] = useState([]);
-  const [sending, setSending]   = useState(false);
-  const [sendError, setSendError] = useState('');
+  const [mode, setMode] = useState('sender'); // 'sender' | 'receiver' | 'room'
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false);
+  const [currentAvatar, setCurrentAvatar] = useState(() => {
+    return localStorage.getItem('rheo_avatar') || localStorage.getItem('ds_avatar') || 'fox';
+  });
 
-  const toggleRecipient = (u) => {
-    setRecipients(prev =>
-      prev.some(r => r.id === u.id) ? prev.filter(r => r.id !== u.id) : [...prev, u]
-    );
-  };
+  // Auto-switch to room mode when a room becomes active
+  useEffect(() => {
+    if (activeRoom && mode !== 'room') {
+      setMode('room');
+    }
+    if (!activeRoom && mode === 'room') {
+      setMode('sender');
+    }
+  }, [activeRoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSend = async () => {
-    if (!file || recipients.length === 0) return;
-    setSending(true);
-    setSendError('');
-    try {
-      const usernameMap = {};
-      recipients.forEach(r => { usernameMap[r.id] = r.username; });
-      await sendFile(file, recipients.map(r => r.id), usernameMap);
-      setFile(null);
-      setRecipients([]);
-    } catch (err) {
-      setSendError(err.message);
-    } finally {
-      setSending(false);
+  const handleSelectAvatar = (avatarId) => {
+    setCurrentAvatar(avatarId);
+    localStorage.setItem('rheo_avatar', avatarId);
+    localStorage.setItem('ds_avatar', avatarId);
+
+    const avatarIndexMap = {
+      fox: 0, panda: 1, cat: 2, dog: 3, rabbit: 4, bear: 5, koala: 6, penguin: 7,
+      frog: 8, hamster: 9, wolf: 10, duck: 11, pig: 12, tiger: 13, lion: 14, monkey: 15
+    };
+    const avatarIndex = avatarIndexMap[avatarId] ?? 0;
+
+    const socket = getSocket();
+    if (socket) {
+      socket.emit('UPDATE_AVATAR', { avatarId, avatarIndex });
     }
   };
 
-  const transferList = Array.from(transfers.values());
-  const active  = transferList.filter(t => ['PENDING','ACCEPTED','TRANSFERRING','PAUSED'].includes(t.status));
-  const history  = transferList.filter(t => ['COMPLETED','CANCELLED','FAILED','REJECTED','INTERRUPTED'].includes(t.status));
+  const handleModeChange = (newMode) => {
+    if (newMode === 'room' && !activeRoom) {
+      setIsCreateRoomOpen(true);
+    } else {
+      setMode(newMode);
+    }
+  };
+
+  const handleRoomCreated = (room) => {
+    setIsCreateRoomOpen(false);
+    if (room) {
+      setMode('room');
+    }
+  };
+
+  // If there are pending incoming requests and user is on sender mode, give subtle cue
+  useEffect(() => {
+    if (pendingRequests && pendingRequests.length > 0) {
+      // User can switch or handle via floating notification
+    }
+  }, [pendingRequests]);
 
   return (
-    <div className="min-h-screen bg-surface-900 flex flex-col">
-      {/* ── Nav ───────────────────────────────────────────── */}
-      <header className="border-b border-surface-700 bg-surface-800/60 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-            </div>
-            <span className="font-bold gradient-text">DropShare</span>
-          </div>
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col relative selection:bg-teal-500 selection:text-white">
+      {/* Mesh grid background */}
+      <div className="fixed inset-0 bg-mesh-grid pointer-events-none z-0 opacity-40" />
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 text-sm text-slate-400">
-              <div className="badge-online" />
-              <span>{user?.display_name || user?.username}</span>
+      {/* Floating Dynamic Island Navbar */}
+      <Navbar
+        mode={mode}
+        setMode={handleModeChange}
+        user={user}
+        currentAvatar={currentAvatar}
+        onOpenProfile={() => setIsProfileOpen(true)}
+        pendingRequestsCount={pendingRequests?.length || 0}
+        hasActiveRoom={!!activeRoom}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-10 relative z-10">
+        {mode === 'sender' && <SenderMode />}
+        {mode === 'receiver' && <ReceiverMode />}
+        {mode === 'room' && activeRoom && <RoomPanel />}
+        {mode === 'room' && !activeRoom && (
+          <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6 animate-fade-in">
+            <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center text-4xl shadow-lg">
+              🏠
             </div>
-            <button id="logout-btn" onClick={logout} className="btn-ghost text-xs py-1.5 px-3">
-              Sign out
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-extrabold text-slate-900">No active room</h2>
+              <p className="text-slate-500 text-sm max-w-xs">
+                Create a room to share multiple files and chat with your team in real time.
+              </p>
+            </div>
+            <button
+              onClick={() => setIsCreateRoomOpen(true)}
+              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-bold shadow-lg hover:shadow-xl hover:from-teal-700 hover:to-cyan-700 transition-all flex items-center gap-2.5"
+            >
+              <span>🏠</span> Create a Room
             </button>
           </div>
-        </div>
-      </header>
-
-      {/* ── Body ──────────────────────────────────────────── */}
-      <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-          {/* ── Send Panel ─────────────────────────────────── */}
-          <section>
-            <h2 className="text-lg font-semibold text-slate-100 mb-4">Send a File</h2>
-
-            <div className="card p-5 space-y-5">
-              <DropZone onFileSelect={setFile} />
-
-              <div>
-                <p className="text-sm font-medium text-slate-400 mb-2">Recipients</p>
-                <UserSearch selected={recipients} onToggle={toggleRecipient} />
-              </div>
-
-              {sendError && (
-                <p className="text-sm text-red-400 animate-fade-in">{sendError}</p>
-              )}
-
-              <button
-                id="send-file-btn"
-                onClick={handleSend}
-                disabled={!file || recipients.length === 0 || sending}
-                className="btn-primary w-full py-3">
-                {sending ? (
-                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                    </svg>
-                    Send to {recipients.length || ''} {recipients.length === 1 ? 'person' : recipients.length > 1 ? 'people' : '…'}
-                  </>
-                )}
-              </button>
-            </div>
-          </section>
-
-          {/* ── Transfers Panel ────────────────────────────── */}
-          <section className="space-y-6">
-            {/* Active */}
-            <div>
-              <h2 className="text-lg font-semibold text-slate-100 mb-4">
-                Active Transfers
-                {active.length > 0 && (
-                  <span className="ml-2 text-sm font-normal text-brand-400">({active.length})</span>
-                )}
-              </h2>
-              {active.length === 0 ? (
-                <div className="card p-8 text-center text-slate-600">
-                  <p className="text-sm">No active transfers</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {active.map(t => <TransferCard key={t.transferId} transfer={t} />)}
-                </div>
-              )}
-            </div>
-
-            {/* History */}
-            {history.length > 0 && (
-              <div>
-                <h2 className="text-lg font-semibold text-slate-100 mb-4">History</h2>
-                <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                  {history.map(t => <TransferCard key={t.transferId} transfer={t} />)}
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
+        )}
       </main>
 
-      {/* Incoming request modal (rendered at root z-level) */}
+      {/* Floating Incoming Transfer Alerts */}
       <IncomingRequests />
+
+      {/* Floating Chat Box (always visible when in a room) */}
+      <RoomChatBox />
+
+      {/* Create Room Modal */}
+      <CreateRoomModal
+        isOpen={isCreateRoomOpen}
+        onClose={handleRoomCreated}
+      />
+
+      {/* Profile & Activity Modal */}
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        currentAvatar={currentAvatar}
+        onSelectAvatar={handleSelectAvatar}
+      />
+
+      {/* Clean Modern Footer */}
+      <footer className="relative z-10 border-t border-slate-200/80 py-6 px-4 sm:px-8 bg-white/50 backdrop-blur-sm text-center text-xs text-slate-400">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">
+          <div className="flex items-center gap-2">
+            <span className="font-extrabold text-slate-900 tracking-wider">RHEO</span>
+            <span>·</span>
+            <span>Real-Time P2P Flow Mesh</span>
+          </div>
+          <div className="flex items-center gap-3">
+            {activeRoom && (
+              <span className="flex items-center gap-1.5 text-teal-700 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
+                Room Active · {activeRoom.members?.length || 0} members
+              </span>
+            )}
+            {!activeRoom && (
+              <span className="flex items-center gap-1.5 text-teal-700 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
+                Node WebSocket Relay Connected
+              </span>
+            )}
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

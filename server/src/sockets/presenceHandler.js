@@ -24,7 +24,6 @@ function register(io, socket) {
           ? callback({ success: false, message: 'Invalid userIds' })
           : null;
       }
-      const presence = await getBulkPresence(userIds);
       if (typeof callback === 'function') {
         callback({ success: true, presence });
       }
@@ -33,6 +32,21 @@ function register(io, socket) {
       if (typeof callback === 'function') {
         callback({ success: false, message: 'Failed to get presence' });
       }
+    }
+  });
+
+  // ── UPDATE_AVATAR ───────────────────────────────────────────────
+  socket.on('UPDATE_AVATAR', async (data, callback) => {
+    try {
+      const { avatarIndex, avatarId } = data || {};
+      const { setUserOnline } = require('../redis/presence');
+      socket.avatarIndex = avatarIndex;
+      socket.avatarId = avatarId;
+      await setUserOnline(socket.userId, socket.id, socket.networkGroup, avatarIndex, avatarId);
+      if (typeof callback === 'function') callback({ success: true });
+    } catch (err) {
+      logger.error('UPDATE_AVATAR error', { userId: socket.userId, error: err.message });
+      if (typeof callback === 'function') callback({ success: false });
     }
   });
 }

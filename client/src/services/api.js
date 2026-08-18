@@ -3,12 +3,21 @@
  */
 import axios from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_URL && !import.meta.env.VITE_API_URL.includes('localhost')) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:5000/api`;
+  }
+  return 'http://localhost:5000/api';
+};
 
 const api = axios.create({
-  baseURL: API_BASE,
+  baseURL: getApiBase(),
   withCredentials: true,
 });
+
 
 // Attach JWT from localStorage on every request
 api.interceptors.request.use((config) => {

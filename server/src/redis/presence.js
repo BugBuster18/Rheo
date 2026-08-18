@@ -22,23 +22,36 @@ const { redisClient } = require('../config/redis');
 const logger = require('../utils/logger');
 
 const PRESENCE_PREFIX = 'presence:';
+const NETWORK_PEERS_PREFIX = 'network_peers:';
 const PRESENCE_TTL_SECONDS = 30; // Auto-expire stale entries
 
 /**
- * Mark a user as online in Redis.
- * @param {string} userId   - User's UUID
- * @param {string} socketId - Socket.IO socket ID on this instance
+ * Mark a user as online in Redis with optional network grouping & avatar index.
+ * @param {string} userId       - User's UUID
+ * @param {string} socketId     - Socket.IO socket ID on this instance
+ * @param {string} [networkGroup] - Local subnet/gateway IP identifier
+ * @param {number} [avatarIndex] - Selected animal avatar index (0..15)
+ * @param {string} [avatarId]    - Selected animal avatar ID (e.g. 'fox')
  */
-async function setUserOnline(userId, socketId) {
+async function setUserOnline(userId, socketId, networkGroup = 'default', avatarIndex = null, avatarId = null) {
   const key = PRESENCE_PREFIX + userId;
   const value = JSON.stringify({
     socketId,
+    networkGroup,
+    avatarIndex,
+    avatarId,
     instanceId: process.env.INSTANCE_ID || process.pid.toString(),
     connectedAt: Date.now(),
   });
   // No TTL on online — we clear it explicitly on disconnect
   await redisClient.set(key, value);
-  logger.info('User came online', { userId, socketId });
+
+  // Add to network peers set
+  if (networkGroup) {
+    await redisClient.sadd(NETWORK_PEERS_PREFIX + networkGroup, userId);
+  }
+
+  logger.info('User came online', { userId, socketId, networkGroup, avatarIndex, avatarId });
 }
 
 /**
@@ -46,9 +59,29 @@ async function setUserOnline(userId, socketId) {
  * @param {string} userId
  */
 async function setUserOffline(userId) {
+  const presence = await getUserPresence(userId);
+  if (presence?.networkGroup) {
+    await redisClient.srem(NETWORK_PEERS_PREFIX + presence.networkGroup, userId);
+  }
+
   const key = PRESENCE_PREFIX + userId;
   await redisClient.del(key);
   logger.info('User went offline', { userId });
+}
+
+/**
+ * Get all online user IDs on a specific local network group.
+ * @param {string} networkGroup
+ * @param {string} [excludeUserId]
+ * @returns {Promise<string[]>}
+ */
+async function getLocalNetworkUserIds(networkGroup, excludeUserId) {
+  if (!networkGroup) return [];
+  const members = await redisClient.smembers(NETWORK_PEERS_PREFIX + networkGroup);
+  if (excludeUserId) {
+    return members.filter(id => id !== excludeUserId);
+  }
+  return members;
 }
 
 /**
@@ -84,7 +117,7 @@ async function getBulkPresence(userIds) {
 }
 
 /**
- * Get presence data for a user (includes socketId, instanceId).
+ * Get presence data for a user (includes socketId, instanceId, networkGroup).
  * Returns null if user is offline.
  * @param {string} userId
  * @returns {Promise<Object|null>}
@@ -106,4 +139,5 @@ module.exports = {
   isUserOnline,
   getBulkPresence,
   getUserPresence,
+  getLocalNetworkUserIds,
 };

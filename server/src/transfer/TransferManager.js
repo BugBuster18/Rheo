@@ -26,6 +26,20 @@ class TransferManager {
   constructor() {
     // Map<transferId, TransferState>
     this.activeTransfers = new Map();
+    // Map<transferId, pendingTransferData> for sub-millisecond handshakes
+    this.pendingTransfers = new Map();
+  }
+
+  registerPendingTransfer(data) {
+    this.pendingTransfers.set(data.id, data);
+  }
+
+  getPendingTransfer(transferId) {
+    return this.pendingTransfers.get(transferId) || null;
+  }
+
+  removePendingTransfer(transferId) {
+    this.pendingTransfers.delete(transferId);
   }
 
   /**

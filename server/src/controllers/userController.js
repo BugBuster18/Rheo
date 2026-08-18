@@ -34,4 +34,35 @@ async function getUserStatus(req, res, next) {
   }
 }
 
-module.exports = { searchUsers, getUserStatus };
+async function getLocalUsers(req, res, next) {
+  try {
+    const rawIp = req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                  req.headers['x-real-ip'] ||
+                  req.ip ||
+                  req.socket.remoteAddress || '127.0.0.1';
+    const cleanIp = rawIp.replace(/^::ffff:/, '');
+
+    const isPrivateOrLoopback =
+      cleanIp === '127.0.0.1' ||
+      cleanIp === '::1' ||
+      cleanIp === 'localhost' ||
+      cleanIp.startsWith('192.168.') ||
+      cleanIp.startsWith('10.') ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(cleanIp);
+
+    const networkGroup = req.query.networkKey || (isPrivateOrLoopback ? 'local_lan' : cleanIp);
+
+    const users = await userService.getLocalUsers(req.user.userId, networkGroup);
+    return res.status(HTTP_STATUS.OK).json({
+      success: true,
+      data: {
+        users,
+        networkGroup,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { searchUsers, getUserStatus, getLocalUsers };

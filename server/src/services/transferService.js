@@ -58,11 +58,12 @@ function serializeTransfer(transfer) {
  * @param {string[]} params.receiverIds
  * @returns {Promise<{groupId: string, transfers: Array}>}
  */
-async function createTransferGroup({ senderId, fileName, fileSize, totalChunks, fileHash, receiverIds }) {
+async function createTransferGroup({ senderId, fileName, fileSize, totalChunks, fileHash, receiverIds, groupId, predefinedTransfers }) {
   const result = await prisma.$transaction(async (tx) => {
     // Create the shared group record
     const group = await tx.transferGroup.create({
       data: {
+        ...(groupId ? { id: groupId } : {}),
         senderId,
         fileName,
         fileSize:    BigInt(fileSize),   // store as BigInt in DB
@@ -73,12 +74,13 @@ async function createTransferGroup({ senderId, fileName, fileSize, totalChunks, 
 
     // Create one transfer row per receiver (all inside the same transaction)
     const transfers = await Promise.all(
-      receiverIds.map(receiverId =>
+      (predefinedTransfers || receiverIds.map(receiverId => ({ receiverId }))).map(t =>
         tx.transfer.create({
           data: {
-            groupId:    group.id,
+            ...(t.id ? { id: t.id } : {}),
+            groupId:             group.id,
             senderId,
-            receiverId,
+            receiverId:          t.receiverId,
             totalChunks,
             status:              TRANSFER_STATUS.PENDING,
             lastConfirmedChunk:  -1,
@@ -109,13 +111,20 @@ async function createTransferGroup({ senderId, fileName, fileSize, totalChunks, 
  * @param {string} status
  */
 async function updateTransferStatus(transferId, status) {
-  const updated = await prisma.transfer.update({
-    where: { id: transferId },
-    data:  { status },
-    select: { id: true, status: true },
-  });
-  logger.info('Transfer status updated', { transferId, status });
-  return updated;
+  try {
+    const updated = await prisma.transfer.update({
+      where: { id: transferId },
+      data:  { status },
+      select: { id: true, status: true },
+    });
+    logger.info('Transfer status updated', { transferId, status });
+    return updated;
+  } catch (err) {
+    if (err.code !== 'P2025') {
+      logger.warn('updateTransferStatus error', { transferId, error: err.message });
+    }
+    return null;
+  }
 }
 
 /**
@@ -123,25 +132,21 @@ async function updateTransferStatus(transferId, status) {
  * @param {string} transferId
  */
 async function completeTransfer(transferId) {
-  await prisma.transfer.update({
-    where: { id: transferId },
-    data: {
-      status:      TRANSFER_STATUS.COMPLETED,
-      completedAt: new Date(),
-    },
-  });
-  logger.info('Transfer completed', { transferId });
+  try {
+    await prisma.transfer.update({
+      where: { id: transferId },
+      data: {
+        status:      TRANSFER_STATUS.COMPLETED,
+        completedAt: new Date(),
+      },
+    });
+    logger.info('Transfer completed', { transferId });
+  } catch (err) {
+    if (err.code !== 'P2025') {
+      logger.warn('completeTransfer error', { transferId, error: err.message });
+    }
+  }
 }
-
-// ─────────────────────────────────────────────────────────────────
-// Checkpoint Persistence
-//
-// We do NOT write to PostgreSQL after every single chunk ACK.
-// For a 2 GB file (2048 × 1 MB chunks) that would be 2048 DB writes.
-// Instead we checkpoint every DB_CHECKPOINT_INTERVAL chunks.
-// Recovery is accurate to ±DB_CHECKPOINT_INTERVAL chunks.
-// The in-memory TransferState has the precise value between checkpoints.
-// ─────────────────────────────────────────────────────────────────
 
 /**
  * Persist last_confirmed_chunk to PostgreSQL.
@@ -149,11 +154,17 @@ async function completeTransfer(transferId) {
  * @param {number} lastConfirmedChunk
  */
 async function checkpointTransfer(transferId, lastConfirmedChunk) {
-  await prisma.transfer.update({
-    where: { id: transferId },
-    data:  { lastConfirmedChunk },
-  });
-  logger.debug('Transfer checkpoint saved', { transferId, lastConfirmedChunk });
+  try {
+    await prisma.transfer.update({
+      where: { id: transferId },
+      data:  { lastConfirmedChunk },
+    });
+    logger.debug('Transfer checkpoint saved', { transferId, lastConfirmedChunk });
+  } catch (err) {
+    if (err.code !== 'P2025') {
+      logger.warn('checkpointTransfer error', { transferId, error: err.message });
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────

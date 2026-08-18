@@ -18,10 +18,11 @@
 
 const { SOCKET_EVENTS, TRANSFER_STATUS } = require('../constants');
 const transferService = require('../services/transferService');
+const userService     = require('../services/userService');
 const transferManager = require('../transfer/TransferManager');
 const { isUserOnline, getUserPresence } = require('../redis/presence');
 const { transferEvents } = require('../redis/pubsub');
-const { findSocketByUserId } = require('./index');
+const { findSocketByUserId } = require('./socketUtils');
 const logger = require('../utils/logger');
 const config = require('../config/env');
 
@@ -31,7 +32,7 @@ function register(io, socket) {
     const senderId = socket.userId; // Derived from JWT — never trust data.senderId
 
     try {
-      const { fileName, fileSize, fileHash, totalChunks, receiverIds } = data;
+      const { fileName, fileSize, fileHash, fileType, totalChunks, receiverIds } = data;
 
       // Basic validation
       if (!Array.isArray(receiverIds) || receiverIds.length === 0) {
@@ -40,40 +41,62 @@ function register(io, socket) {
       if (fileSize > config.MAX_FILE_SIZE_BYTES) {
         return ack(callback, false, 'File exceeds maximum allowed size');
       }
-      // Prevent a user from sending to themselves
-      if (receiverIds.includes(senderId)) {
-        return ack(callback, false, 'Cannot send to yourself');
+      const crypto = require('crypto');
+      const groupId = crypto.randomUUID();
+      const transfers = receiverIds.map(receiverId => ({
+        id: crypto.randomUUID(),
+        groupId,
+        senderId,
+        receiverId,
+        fileName,
+        fileSize,
+        fileType,
+        totalChunks,
+        fileHash: fileHash || '',
+        status: TRANSFER_STATUS.PENDING,
+      }));
+
+      // Register in-memory instantly (< 1ms)
+      for (const t of transfers) {
+        transferManager.registerPendingTransfer(t);
       }
 
-      // Create group + one transfer per receiver in PostgreSQL
-      const { groupId, transfers } = await transferService.createTransferGroup({
+      const senderUsername = socket.username || socket.handshake.auth?.username || 'Sender';
+
+      // Route the request to each receiver immediately
+      for (const transfer of transfers) {
+        const receiverId = transfer.receiverId;
+        const requestPayload = {
+          transferId:  transfer.id,
+          groupId,
+          senderId,
+          senderUsername,
+          fileName,
+          fileSize,
+          fileType,
+          totalChunks,
+          fileHash: transfer.fileHash,
+        };
+
+        routeEventToUser(io, receiverId, SOCKET_EVENTS.TRANSFER_REQUEST, requestPayload);
+      }
+
+      // Respond to sender immediately without waiting for database I/O
+      ack(callback, true, 'Transfer request sent', { groupId, transfers });
+
+      // Persist in database asynchronously in background with matching UUIDs
+      transferService.createTransferGroup({
         senderId,
         fileName,
         fileSize,
         totalChunks,
         fileHash,
         receiverIds,
+        groupId,
+        predefinedTransfers: transfers,
+      }).catch(err => {
+        logger.warn('Background transfer create failed', { error: err.message });
       });
-
-      logger.info('TRANSFER_REQUEST created', { senderId, groupId, receivers: receiverIds.length });
-
-      // Route the request to each receiver (possibly on a different EC2 instance)
-      for (const transfer of transfers) {
-        const requestPayload = {
-          transferId:  transfer.id,
-          groupId,
-          senderId,
-          senderUsername: socket.handshake.auth?.username, // set during login
-          fileName,
-          fileSize,
-          totalChunks,
-          fileHash,
-        };
-
-        await routeEventToUser(io, transfer.receiver_id, SOCKET_EVENTS.TRANSFER_REQUEST, requestPayload);
-      }
-
-      ack(callback, true, 'Transfer request sent', { groupId, transfers });
     } catch (err) {
       logger.error('TRANSFER_REQUEST error', { senderId, error: err.message });
       ack(callback, false, 'Failed to create transfer request');
@@ -86,47 +109,72 @@ function register(io, socket) {
     const { transferId } = data;
 
     try {
-      const { authorized, transfer, reason } = await transferService.verifyTransferAuthorization(
-        transferId, receiverId, 'receiver'
-      );
-      if (!authorized) {
-        return ack(callback, false, reason || 'Unauthorized');
-      }
-      if (transfer.status !== TRANSFER_STATUS.PENDING) {
-        return ack(callback, false, `Transfer is already ${transfer.status}`);
+      const pending = transferManager.getPendingTransfer(transferId);
+      let senderId, fileName, fileSize, totalChunks, fileHash, groupId;
+
+      if (pending) {
+        if (pending.receiverId !== receiverId) {
+          return ack(callback, false, 'Unauthorized');
+        }
+        senderId = pending.senderId;
+        fileName = pending.fileName;
+        fileSize = pending.fileSize;
+        totalChunks = pending.totalChunks;
+        fileHash = pending.fileHash;
+        groupId = pending.groupId;
+        transferManager.removePendingTransfer(transferId);
+      } else {
+        // Fallback to database lookup if not found in memory
+        const { authorized, transfer, reason } = await transferService.verifyTransferAuthorization(
+          transferId, receiverId, 'receiver'
+        );
+        if (!authorized) {
+          return ack(callback, false, reason || 'Unauthorized');
+        }
+        senderId = transfer.sender_id || transfer.senderId;
+        fileName = transfer.file_name || transfer.fileName;
+        fileSize = transfer.file_size || transfer.fileSize;
+        totalChunks = transfer.total_chunks || transfer.totalChunks;
+        fileHash = transfer.file_hash || transfer.fileHash;
+        groupId = transfer.group_id || transfer.groupId;
       }
 
-      // Mark accepted in DB
-      await transferService.updateTransferStatus(transferId, TRANSFER_STATUS.ACCEPTED);
-
-      // Register in-memory state for the active transfer
-      transferManager.createActiveTransfer({
+      // Register active transfer in-memory instantly (< 1ms)
+      const activeTransfer = transferManager.createActiveTransfer({
         transferId,
-        groupId:     transfer.group_id,
-        senderId:    transfer.sender_id,
+        groupId,
+        senderId,
         receiverId,
-        fileName:    transfer.file_name,
-        fileSize:    transfer.file_size,
-        totalChunks: transfer.total_chunks,
-        fileHash:    transfer.file_hash,
-        lastConfirmedChunk: transfer.last_confirmed_chunk,
+        fileName,
+        fileSize,
+        totalChunks,
+        fileHash,
+        lastConfirmedChunk: -1,
       });
 
-      logger.info('Transfer accepted', { transferId, receiverId });
+      if (activeTransfer) {
+        activeTransfer.status = TRANSFER_STATUS.TRANSFERRING;
+      }
 
-      // Tell sender to start sending chunks
-      await routeEventToUser(io, transfer.sender_id, SOCKET_EVENTS.TRANSFER_START, {
+      // Tell sender to start streaming chunks immediately!
+      routeEventToUser(io, senderId, SOCKET_EVENTS.TRANSFER_START, {
         transferId,
         receiverId,
-        lastConfirmedChunk: transfer.last_confirmed_chunk,
+        lastConfirmedChunk: -1,
       });
 
       ack(callback, true, 'Transfer accepted');
+
+      // Update PostgreSQL in background
+      transferService.updateTransferStatus(transferId, TRANSFER_STATUS.ACCEPTED).catch(err => {
+        logger.warn('Background transfer accept status update error', { error: err.message });
+      });
     } catch (err) {
       logger.error('TRANSFER_ACCEPT error', { receiverId, transferId, error: err.message });
       ack(callback, false, 'Failed to accept transfer');
     }
   });
+
 
   // ── TRANSFER_REJECT ───────────────────────────────────────────
   socket.on(SOCKET_EVENTS.TRANSFER_REJECT, async (data, callback) => {
@@ -142,7 +190,8 @@ function register(io, socket) {
       await transferService.updateTransferStatus(transferId, TRANSFER_STATUS.REJECTED);
       logger.info('Transfer rejected', { transferId, receiverId });
 
-      await routeEventToUser(io, transfer.sender_id, SOCKET_EVENTS.TRANSFER_REJECT, { transferId, receiverId });
+      const senderId = transfer.sender_id || transfer.senderId;
+      await routeEventToUser(io, senderId, SOCKET_EVENTS.TRANSFER_REJECT, { transferId, receiverId });
       ack(callback, true, 'Transfer rejected');
     } catch (err) {
       logger.error('TRANSFER_REJECT error', { receiverId, transferId, error: err.message });
@@ -166,7 +215,9 @@ function register(io, socket) {
       logger.info('Transfer cancelled', { transferId, cancelledBy: userId });
 
       // Notify the other party
-      const otherUserId = userId === transfer.sender_id ? transfer.receiver_id : transfer.sender_id;
+      const senderId   = transfer.sender_id || transfer.senderId;
+      const receiverId = transfer.receiver_id || transfer.receiverId;
+      const otherUserId = userId === senderId ? receiverId : senderId;
       await routeEventToUser(io, otherUserId, SOCKET_EVENTS.TRANSFER_CANCEL_ACK, {
         transferId,
         cancelledBy: userId,
@@ -176,6 +227,68 @@ function register(io, socket) {
     } catch (err) {
       logger.error('TRANSFER_CANCEL error', { userId, transferId, error: err.message });
       ack(callback, false, 'Failed to cancel transfer');
+    }
+  });
+
+  // ── WEBRTC_SIGNAL (Zero-Data P2P Local LAN Signaling) ──────────
+  socket.on(SOCKET_EVENTS.WEBRTC_SIGNAL, async (data, callback) => {
+    const senderId = socket.userId;
+    const { transferId, targetUserId, signal } = data;
+
+    if (!targetUserId || !signal) {
+      return ack(callback, false, 'Invalid WebRTC signal payload');
+    }
+
+    try {
+      logger.debug('Relaying WebRTC P2P signal', { transferId, from: senderId, to: targetUserId, signalType: signal.type });
+      await routeEventToUser(io, targetUserId, SOCKET_EVENTS.WEBRTC_SIGNAL, {
+        transferId,
+        senderId,
+        signal,
+      });
+      ack(callback, true, 'Signal relayed');
+    } catch (err) {
+      logger.error('WEBRTC_SIGNAL relay error', { senderId, targetUserId, error: err.message });
+      ack(callback, false, 'Failed to relay WebRTC signal');
+    }
+  });
+
+  // ── GET_LOCAL_PEERS (Scan current connected users on local network) ──
+  socket.on('GET_LOCAL_PEERS', async (_data, callback) => {
+    const userId = socket.userId;
+    const networkGroup = socket.networkGroup || 'default';
+
+    try {
+      const { getLocalNetworkUserIds } = require('../redis/presence');
+      const localUserIds = await getLocalNetworkUserIds(networkGroup, userId);
+
+      if (!localUserIds || localUserIds.length === 0) {
+        return ack(callback, true, 'No other local peers found', { peers: [], networkGroup });
+      }
+
+      const { getUserPresence } = require('../redis/presence');
+      const peers = [];
+      for (const id of localUserIds) {
+        const u = await userService.getUserById(id);
+        const presence = await getUserPresence(id);
+        if (u) {
+          peers.push({
+            id: u.id,
+            username: u.username,
+            displayName: u.displayName,
+            avatarIndex: presence?.avatarIndex ?? null,
+            avatarId: presence?.avatarId ?? null,
+            online: true,
+            isLocal: true,
+            networkGroup,
+          });
+        }
+      }
+
+      ack(callback, true, 'Local peers found', { peers, networkGroup });
+    } catch (err) {
+      logger.error('GET_LOCAL_PEERS error', { userId, error: err.message });
+      ack(callback, false, 'Failed to retrieve local peers', { peers: [] });
     }
   });
 }
@@ -190,21 +303,23 @@ function register(io, socket) {
  * If on another instance: publish via Redis Pub/Sub.
  */
 async function routeEventToUser(io, targetUserId, eventName, payload) {
-  const localSocket = findSocketByUserId(io, targetUserId);
-  if (localSocket) {
-    localSocket.emit(eventName, payload);
+  if (!targetUserId) {
+    logger.warn('routeEventToUser missing targetUserId', { eventName });
     return;
   }
 
-  // User may be on another Node.js instance — publish via Redis
-  const userOnline = await isUserOnline(targetUserId);
-  if (userOnline) {
+  // Emit directly to target user room (reaches ALL open tabs for this user on local instance)
+  io.to(`user:${targetUserId}`).emit(eventName, payload);
+  logger.info('Event routed to user room', { targetUserId, eventName });
+
+  // Also publish via Redis Pub/Sub for multi-instance deployments
+  try {
     await transferEvents.publish(eventName, {
       targetUserId,
       payload,
     });
-  } else {
-    logger.info('Target user is offline, event not delivered', { targetUserId, eventName });
+  } catch (err) {
+    logger.warn('Redis publish failed in routeEventToUser', { error: err.message });
   }
 }
 

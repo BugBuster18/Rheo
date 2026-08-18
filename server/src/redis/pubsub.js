@@ -24,6 +24,8 @@ const { publisher, subscriber } = require('../config/redis');
 const { REDIS_CHANNELS } = require('../constants');
 const logger = require('../utils/logger');
 
+const INSTANCE_ID = process.env.INSTANCE_ID || `inst_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+
 // Track registered handlers per channel
 const handlers = new Map();
 
@@ -36,7 +38,7 @@ const handlers = new Map();
  * @param {Object} data      - Event payload (must be JSON-serializable)
  */
 async function publishEvent(channel, eventName, data) {
-  const message = JSON.stringify({ event: eventName, data, timestamp: Date.now() });
+  const message = JSON.stringify({ event: eventName, data, instanceId: INSTANCE_ID, timestamp: Date.now() });
   await publisher.publish(channel, message);
   logger.debug('Redis event published', { channel, event: eventName });
 }
@@ -73,6 +75,9 @@ subscriber.on('message', (channel, message) => {
     return;
   }
 
+  // Ignore messages published by this exact process instance to prevent duplicates
+  if (parsed.instanceId === INSTANCE_ID) return;
+
   for (const handler of channelHandlers) {
     try {
       handler(parsed.event, parsed.data);
@@ -81,6 +86,7 @@ subscriber.on('message', (channel, message) => {
     }
   }
 });
+
 
 // Convenience helpers for the two main channels
 const presence = {
